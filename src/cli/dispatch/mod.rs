@@ -1,9 +1,9 @@
-use crate::cli::actions::{Action, RemoteEndpoint};
-use clap::{ArgMatches, parser::ValueSource};
-use std::path::PathBuf;
+use crate::cli::actions::{Action, RemoteEndpoint, SyncOperand};
+use clap::ArgMatches;
+use std::path::{Path, PathBuf};
 
 const PUBLIC_USAGE_HINT: &str = "public CLI now uses subcommands. Examples: \
-    `pxs sync SRC DST`, `pxs push SRC ENDPOINT`, `pxs pull ENDPOINT DST`, \
+    `pxs sync SRC DST`, `pxs sync SRC user@host:/dst`, `pxs sync SRC host:port`, \
     `pxs listen ADDR DST`, `pxs serve ADDR SRC`.";
 
 /// Main command dispatcher.
@@ -68,9 +68,13 @@ fn threshold(matches: &ArgMatches) -> f32 {
     *matches.get_one::<f32>("threshold").unwrap_or(&0.5)
 }
 
-fn parse_remote_endpoint(endpoint: &str) -> anyhow::Result<RemoteEndpoint> {
-    if endpoint == "-" {
+fn parse_remote_endpoint(endpoint: &str, allow_stdio: bool) -> anyhow::Result<RemoteEndpoint> {
+    if allow_stdio && endpoint == "-" {
         return Ok(RemoteEndpoint::Stdio);
+    }
+
+    if endpoint.contains('[') || endpoint.contains(']') {
+        let _ = split_endpoint_host_suffix(endpoint)?;
     }
 
     if endpoint.parse::<std::net::SocketAddr>().is_ok() {
@@ -84,67 +88,152 @@ fn parse_remote_endpoint(endpoint: &str) -> anyhow::Result<RemoteEndpoint> {
         });
     }
 
-    Ok(RemoteEndpoint::Tcp(endpoint.to_string()))
+    anyhow::bail!("unsupported remote endpoint syntax: {endpoint}")
+}
+
+fn validate_local_source_operand(path: &Path) -> anyhow::Result<()> {
+    anyhow::ensure!(path.exists(), "Path does not exist: '{}'", path.display());
+    Ok(())
+}
+
+fn validate_local_destination_operand(path: &Path) -> anyhow::Result<()> {
+    if path.exists() && path.is_dir() {
+        return Ok(());
+    }
+
+    let parent = if let Some(parent) = path.parent() {
+        if parent.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            parent.to_path_buf()
+        }
+    } else {
+        PathBuf::from(".")
+    };
+
+    anyhow::ensure!(
+        parent.exists() && parent.is_dir(),
+        "Invalid destination path or parent directory does not exist: '{}'",
+        path.display()
+    );
+    Ok(())
+}
+
+fn parse_sync_operand(value: &str) -> anyhow::Result<SyncOperand> {
+    if value.contains('@') {
+        return Ok(SyncOperand::Remote(parse_remote_endpoint(value, false)?));
+    }
+
+    if value.parse::<std::net::SocketAddr>().is_ok() {
+        return Ok(SyncOperand::Remote(RemoteEndpoint::Tcp(value.to_string())));
+    }
+
+    Ok(SyncOperand::Local(PathBuf::from(value)))
+}
+
+fn build_sync_action(
+    src: SyncOperand,
+    dst: SyncOperand,
+    matches: &ArgMatches,
+    quiet: bool,
+) -> anyhow::Result<Action> {
+    let dry_run = matches
+        .try_get_one::<bool>("dry_run")
+        .ok()
+        .flatten()
+        .copied()
+        .unwrap_or(false);
+    let large_file_parallel_threshold = matches
+        .try_get_one::<u64>("large_file_parallel_threshold")
+        .ok()
+        .flatten()
+        .copied()
+        .unwrap_or(0);
+    let large_file_parallel_workers = matches
+        .try_get_one::<usize>("large_file_parallel_workers")
+        .ok()
+        .flatten()
+        .copied()
+        .unwrap_or(0);
+
+    match (&src, &dst) {
+        (SyncOperand::Local(src_path), SyncOperand::Local(dst_path)) => {
+            validate_local_source_operand(src_path)?;
+            validate_local_destination_operand(dst_path)?;
+        }
+        (SyncOperand::Local(src_path), SyncOperand::Remote(_)) => {
+            validate_local_source_operand(src_path)?;
+        }
+        (SyncOperand::Remote(_), SyncOperand::Local(dst_path)) => {
+            validate_local_destination_operand(dst_path)?;
+        }
+        (SyncOperand::Remote(_), SyncOperand::Remote(_)) => {
+            anyhow::bail!("sync supports at most one remote operand per invocation");
+        }
+    }
+
+    Ok(Action::Sync {
+        src,
+        dst,
+        threshold: threshold(matches),
+        checksum: matches.get_flag("checksum"),
+        dry_run,
+        delete: matches.get_flag("delete"),
+        fsync: matches.get_flag("fsync"),
+        large_file_parallel_threshold,
+        large_file_parallel_workers,
+        ignores: parse_ignores(matches),
+        quiet,
+    })
 }
 
 fn handle_sync(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
-    Ok(Action::Sync {
-        src: required_path(matches, "src")?,
-        dst: required_path(matches, "dst")?,
-        threshold: threshold(matches),
-        checksum: matches.get_flag("checksum"),
-        dry_run: matches.get_flag("dry_run"),
-        delete: matches.get_flag("delete"),
-        fsync: matches.get_flag("fsync"),
-        ignores: parse_ignores(matches),
-        quiet,
-    })
+    let src_text = required_string(matches, "src")?;
+    let dst_text = required_string(matches, "dst")?;
+    let src = parse_sync_operand(&src_text)?;
+    let dst = parse_sync_operand(&dst_text)?;
+
+    if matches!(src, SyncOperand::Remote(RemoteEndpoint::Stdio))
+        || matches!(dst, SyncOperand::Remote(RemoteEndpoint::Stdio))
+    {
+        anyhow::bail!("stdio is not supported by `sync`; use `push` for manual piping");
+    }
+
+    build_sync_action(src, dst, matches, quiet)
 }
 
 fn handle_push(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
-    Ok(Action::Push {
-        endpoint: parse_remote_endpoint(&required_string(matches, "endpoint")?)?,
-        src: required_path(matches, "src")?,
-        threshold: threshold(matches),
-        checksum: matches.get_flag("checksum"),
-        delete: matches.get_flag("delete"),
-        fsync: matches.get_flag("fsync"),
-        large_file_parallel_threshold: *matches
-            .get_one::<u64>("large_file_parallel_threshold")
-            .unwrap_or(&0),
-        large_file_parallel_workers: *matches
-            .get_one::<usize>("large_file_parallel_workers")
-            .unwrap_or(&0),
-        ignores: parse_ignores(matches),
+    let src = required_path(matches, "src")?;
+    let endpoint = parse_remote_endpoint(&required_string(matches, "endpoint")?, true)?;
+    build_sync_action(
+        SyncOperand::Local(src),
+        SyncOperand::Remote(endpoint),
+        matches,
         quiet,
-    })
+    )
 }
 
 fn handle_pull(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
     let endpoint_text = required_string(matches, "endpoint")?;
-    let endpoint = parse_remote_endpoint(&endpoint_text)?;
+    let endpoint = parse_remote_endpoint(&endpoint_text, false)?;
     let threshold = threshold(matches);
     let checksum = matches.get_flag("checksum");
     let ignores = parse_ignores(matches);
 
-    if matches_source_side_pull_flags(matches, checksum, &ignores)
-        && matches!(endpoint, RemoteEndpoint::Tcp(_) | RemoteEndpoint::Stdio)
-    {
-        anyhow::bail!(
-            "source-side flags on raw TCP pull are not supported; configure `pxs serve` instead"
-        );
-    }
+    anyhow::ensure!(
+        !matches!(endpoint, RemoteEndpoint::Stdio),
+        "stdio is not supported for pull mode"
+    );
 
-    Ok(Action::Pull {
-        endpoint,
-        dst: required_path(matches, "dst")?,
-        threshold,
-        checksum,
-        delete: matches.get_flag("delete"),
-        fsync: matches.get_flag("fsync"),
-        ignores,
+    let _ = threshold;
+    let _ = checksum;
+    let _ = ignores;
+    build_sync_action(
+        SyncOperand::Remote(endpoint),
+        SyncOperand::Local(required_path(matches, "dst")?),
+        matches,
         quiet,
-    })
+    )
 }
 
 fn handle_listen(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
@@ -198,19 +287,6 @@ fn handle_internal_stdio(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Ac
         ignores: parse_ignores(matches),
         quiet,
     })
-}
-
-fn matches_source_side_pull_flags(
-    matches: &ArgMatches,
-    checksum: bool,
-    ignores: &[String],
-) -> bool {
-    checksum
-        || !ignores.is_empty()
-        || matches.value_source("exclude_from").is_some()
-        || matches
-            .value_source("threshold")
-            .is_some_and(|source| source != ValueSource::DefaultValue)
 }
 
 struct SshInfo {
@@ -274,36 +350,11 @@ fn split_endpoint_host_suffix(endpoint: &str) -> anyhow::Result<Option<(&str, &s
 }
 
 fn parse_ssh_endpoint(endpoint: &str) -> anyhow::Result<Option<SshInfo>> {
-    let host_suffix = split_endpoint_host_suffix(endpoint)?;
-
-    if endpoint.contains('@') {
-        let (host, suffix) = host_suffix.ok_or_else(|| {
-            anyhow::anyhow!("SSH endpoint must use `HOST:PATH` syntax: {endpoint}")
-        })?;
-        let path = if suffix.is_empty() {
-            ".".to_string()
-        } else {
-            suffix.to_string()
-        };
-        return Ok(Some(SshInfo {
-            host: host.to_string(),
-            path,
-        }));
-    }
-
-    let Some((host, suffix)) = host_suffix else {
-        return Ok(None);
-    };
-
-    let is_numeric_port = !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit());
-    if is_numeric_port {
-        if host.starts_with('[') {
-            anyhow::bail!(
-                "invalid bracketed TCP endpoint `{endpoint}`: expected a valid `[host]:PORT` socket address"
-            );
-        }
+    if !endpoint.contains('@') {
         return Ok(None);
     }
+    let (host, suffix) = split_endpoint_host_suffix(endpoint)?
+        .ok_or_else(|| anyhow::anyhow!("SSH endpoint must use `HOST:PATH` syntax: {endpoint}"))?;
 
     let path = if suffix.is_empty() {
         ".".to_string()
@@ -320,7 +371,7 @@ fn parse_ssh_endpoint(endpoint: &str) -> anyhow::Result<Option<SshInfo>> {
 mod tests {
     use super::handler;
     use crate::cli::{
-        actions::{Action, RemoteEndpoint},
+        actions::{Action, RemoteEndpoint, SyncOperand},
         commands,
     };
     use tempfile::tempdir;
@@ -396,8 +447,9 @@ mod tests {
         ])?;
 
         match action {
-            Action::Push {
-                endpoint,
+            Action::Sync {
+                src: SyncOperand::Local(_),
+                dst: SyncOperand::Remote(endpoint),
                 threshold,
                 checksum,
                 delete,
@@ -416,7 +468,7 @@ mod tests {
                 assert!(delete);
                 assert!(fsync);
             }
-            other => anyhow::bail!("expected Action::Push, got {other:?}"),
+            other => anyhow::bail!("expected Action::Sync, got {other:?}"),
         }
 
         Ok(())
@@ -441,7 +493,7 @@ mod tests {
         ])?;
 
         match action {
-            Action::Push {
+            Action::Sync {
                 large_file_parallel_threshold,
                 large_file_parallel_workers,
                 ..
@@ -449,7 +501,7 @@ mod tests {
                 assert_eq!(large_file_parallel_threshold, 2 * 1024_u64.pow(3));
                 assert_eq!(large_file_parallel_workers, 4);
             }
-            other => anyhow::bail!("expected Action::Push, got {other:?}"),
+            other => anyhow::bail!("expected Action::Sync, got {other:?}"),
         }
 
         Ok(())
@@ -465,8 +517,8 @@ mod tests {
         let action = parse_action(&["pxs", "push", &src_arg, "[::1]:7878"])?;
 
         match action {
-            Action::Push {
-                endpoint: RemoteEndpoint::Tcp(addr),
+            Action::Sync {
+                dst: SyncOperand::Remote(RemoteEndpoint::Tcp(addr)),
                 ..
             } => assert_eq!(addr, "[::1]:7878"),
             other => anyhow::bail!("expected TCP push endpoint, got {other:?}"),
@@ -494,8 +546,8 @@ mod tests {
         ])?;
 
         match action {
-            Action::Push {
-                endpoint: RemoteEndpoint::Tcp(addr),
+            Action::Sync {
+                dst: SyncOperand::Remote(RemoteEndpoint::Tcp(addr)),
                 large_file_parallel_threshold,
                 large_file_parallel_workers,
                 ..
@@ -504,7 +556,7 @@ mod tests {
                 assert_eq!(large_file_parallel_threshold, 64 * 1024_u64.pow(2));
                 assert_eq!(large_file_parallel_workers, 3);
             }
-            other => anyhow::bail!("expected TCP push action, got {other:?}"),
+            other => anyhow::bail!("expected TCP sync action, got {other:?}"),
         }
 
         Ok(())
@@ -519,8 +571,8 @@ mod tests {
 
         let action = parse_action(&["pxs", "push", &src_arg, "-"])?;
         match action {
-            Action::Push {
-                endpoint: RemoteEndpoint::Stdio,
+            Action::Sync {
+                dst: SyncOperand::Remote(RemoteEndpoint::Stdio),
                 ..
             } => {}
             other => anyhow::bail!("expected stdio push endpoint, got {other:?}"),
@@ -550,8 +602,9 @@ mod tests {
         ])?;
 
         match action {
-            Action::Pull {
-                endpoint,
+            Action::Sync {
+                src: SyncOperand::Remote(endpoint),
+                dst: SyncOperand::Local(_),
                 threshold,
                 checksum,
                 delete,
@@ -572,7 +625,7 @@ mod tests {
                 assert!(fsync);
                 assert_eq!(ignores, vec!["*.tmp"]);
             }
-            other => anyhow::bail!("expected Action::Pull, got {other:?}"),
+            other => anyhow::bail!("expected Action::Sync, got {other:?}"),
         }
 
         Ok(())
@@ -585,19 +638,22 @@ mod tests {
         std::fs::create_dir_all(&dst)?;
         let dst_arg = dst.to_string_lossy().to_string();
 
-        let action = parse_action(&["pxs", "pull", "[2001:db8::1]:/srv/data", &dst_arg])?;
+        let action = parse_action(&["pxs", "pull", "user@[2001:db8::1]:/srv/data", &dst_arg])?;
 
         match action {
-            Action::Pull { endpoint, .. } => {
+            Action::Sync {
+                src: SyncOperand::Remote(endpoint),
+                ..
+            } => {
                 assert_eq!(
                     endpoint,
                     RemoteEndpoint::Ssh {
-                        host: "[2001:db8::1]".to_string(),
+                        host: "user@[2001:db8::1]".to_string(),
                         path: "/srv/data".to_string(),
                     }
                 );
             }
-            other => anyhow::bail!("expected Action::Pull, got {other:?}"),
+            other => anyhow::bail!("expected Action::Sync, got {other:?}"),
         }
 
         Ok(())
@@ -614,7 +670,10 @@ mod tests {
         let action = parse_action(&["pxs", "push", &src_arg, "user@example:"])?;
 
         match action {
-            Action::Push { endpoint, .. } => {
+            Action::Sync {
+                dst: SyncOperand::Remote(endpoint),
+                ..
+            } => {
                 assert_eq!(
                     endpoint,
                     RemoteEndpoint::Ssh {
@@ -623,7 +682,7 @@ mod tests {
                     }
                 );
             }
-            other => anyhow::bail!("expected Action::Push, got {other:?}"),
+            other => anyhow::bail!("expected Action::Sync, got {other:?}"),
         }
 
         Ok(())
@@ -639,7 +698,10 @@ mod tests {
         let action = parse_action(&["pxs", "push", &src_arg, "user@example:path:with:colons"])?;
 
         match action {
-            Action::Push { endpoint, .. } => {
+            Action::Sync {
+                dst: SyncOperand::Remote(endpoint),
+                ..
+            } => {
                 assert_eq!(
                     endpoint,
                     RemoteEndpoint::Ssh {
@@ -648,25 +710,31 @@ mod tests {
                     }
                 );
             }
-            other => anyhow::bail!("expected Action::Push, got {other:?}"),
+            other => anyhow::bail!("expected Action::Sync, got {other:?}"),
         }
 
         Ok(())
     }
 
     #[test]
-    fn test_pull_tcp_rejects_source_side_flags() -> anyhow::Result<()> {
+    fn test_pull_tcp_accepts_source_side_flags() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let dst = dir.path().join("dst");
         std::fs::create_dir_all(&dst)?;
         let dst_arg = dst.to_string_lossy().to_string();
 
-        let Err(error) = parse_action(&["pxs", "pull", "127.0.0.1:9999", &dst_arg, "--checksum"])
-        else {
-            anyhow::bail!("raw TCP pull should reject source-side flags");
-        };
-
-        assert!(error.to_string().contains("configure `pxs serve` instead"));
+        let action = parse_action(&["pxs", "pull", "127.0.0.1:9999", &dst_arg, "--checksum"])?;
+        match action {
+            Action::Sync {
+                src: SyncOperand::Remote(RemoteEndpoint::Tcp(addr)),
+                checksum,
+                ..
+            } => {
+                assert_eq!(addr, "127.0.0.1:9999");
+                assert!(checksum);
+            }
+            other => anyhow::bail!("expected Action::Sync, got {other:?}"),
+        }
         Ok(())
     }
 

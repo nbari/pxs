@@ -23,29 +23,29 @@ fn test_pull_stdio_reports_unsupported_mode() -> anyhow::Result<()> {
     let output = run_pxs(&["pull", "-", &dst_arg])?;
 
     assert!(!output.status.success());
-    assert!(stderr_text(&output).contains("stdio is not supported for pull mode"));
+    assert!(stderr_text(&output).contains("unsupported remote endpoint syntax: -"));
     Ok(())
 }
 
 #[test]
-fn test_pull_tcp_source_flags_reports_actionable_error() -> anyhow::Result<()> {
+fn test_pull_tcp_source_flags_attempts_connection() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let dst_arg = dir.path().join("dst").to_string_lossy().to_string();
     let output = run_pxs(&["pull", "127.0.0.1:9999", &dst_arg, "--checksum"])?;
 
     assert!(!output.status.success());
-    assert!(stderr_text(&output).contains("configure `pxs serve` instead"));
+    assert!(stderr_text(&output).contains("Failed to connect"));
     Ok(())
 }
 
 #[test]
-fn test_pull_tcp_delete_reports_actionable_error() -> anyhow::Result<()> {
+fn test_pull_tcp_delete_attempts_connection() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let dst_arg = dir.path().join("dst").to_string_lossy().to_string();
     let output = run_pxs(&["pull", "127.0.0.1:9999", &dst_arg, "--delete"])?;
 
     assert!(!output.status.success());
-    assert!(stderr_text(&output).contains("--delete is not supported"));
+    assert!(stderr_text(&output).contains("Failed to connect"));
     Ok(())
 }
 
@@ -83,6 +83,23 @@ fn test_push_stdio_delete_reports_actionable_error() -> anyhow::Result<()> {
 
     assert!(!output.status.success());
     assert!(stderr_text(&output).contains("--delete is not supported"));
+    Ok(())
+}
+
+#[test]
+fn test_verbose_flag_enables_debug_output() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let src = dir.path().join("src.txt");
+    let dst = dir.path().join("dst.txt");
+    std::fs::write(&src, "content")?;
+    let src_arg = src.to_string_lossy().to_string();
+    let dst_arg = dst.to_string_lossy().to_string();
+
+    let base = run_pxs(&["sync", &src_arg, &dst_arg])?;
+    let verbose = run_pxs(&["-vv", "sync", &src_arg, &dst_arg])?;
+
+    assert!(!stderr_text(&base).contains("Dispatching action:"));
+    assert!(stderr_text(&verbose).contains("Dispatching action:"));
     Ok(())
 }
 

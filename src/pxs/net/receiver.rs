@@ -28,6 +28,7 @@ use std::{
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpListener,
+    sync::{OwnedSemaphorePermit, Semaphore},
 };
 use tokio_util::codec::Framed;
 
@@ -91,6 +92,7 @@ struct ClientHandlingOptions {
     remote_delete_override: RemoteDeleteOverride,
     lz4: Lz4Allowance,
     large_file_parallel: bool,
+    control_session_gate: Option<Arc<Semaphore>>,
     ignores: Arc<[String]>,
 }
 
@@ -106,6 +108,7 @@ struct ClientState {
     delete_mode: DeleteMode,
     source_paths: HashSet<String>,
     parallel_config: Option<ParallelTransferConfig>,
+    control_session_permit: Option<OwnedSemaphorePermit>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -141,6 +144,7 @@ impl ClientState {
             delete_mode: DeleteMode::Disabled,
             source_paths: HashSet::new(),
             parallel_config: None,
+            control_session_permit: None,
         }
     }
 
@@ -240,6 +244,25 @@ impl ClientState {
 
     fn parallel_config(&self) -> Option<ParallelTransferConfig> {
         self.parallel_config
+    }
+
+    fn ensure_control_session(
+        &mut self,
+        control_session_gate: Option<&Arc<Semaphore>>,
+    ) -> anyhow::Result<()> {
+        if self.control_session_permit.is_some() {
+            return Ok(());
+        }
+
+        let Some(gate) = control_session_gate else {
+            return Ok(());
+        };
+
+        let permit = Arc::clone(gate)
+            .try_acquire_owned()
+            .map_err(|_| anyhow::anyhow!("another sync session is already active for this root"))?;
+        self.control_session_permit = Some(permit);
+        Ok(())
     }
 
     fn ensure_parallel_transfer_record(&mut self, path: &str) -> anyhow::Result<String> {
@@ -382,22 +405,62 @@ fn resolve_parallel_transfer_record(
 ///
 /// Returns an error if the connection fails or synchronization fails.
 pub async fn run_pull_client(addr: &str, dst_root: &Path, fsync: bool) -> anyhow::Result<()> {
-    let stream = connect_with_retry(addr).await?;
-    let mut framed = Framed::new(stream, PxsCodec);
-    handle_client_with_transport(
-        &mut framed,
+    run_pull_client_with_options(
+        addr,
         dst_root,
-        ClientHandlingOptions {
-            show_progress: true,
-            fsync,
-            remote_fsync_override: RemoteFsyncOverride::Deny,
-            remote_delete_override: RemoteDeleteOverride::Deny,
-            lz4: Lz4Allowance::Allow,
-            large_file_parallel: false,
-            ignores: Arc::from(Vec::<String>::new()),
+        RemoteSyncOptions {
+            threshold: 0.5,
+            features: super::RemoteFeatureOptions {
+                checksum: false,
+                delete: false,
+                fsync,
+            },
+            large_file_parallel: None,
+            ignores: &[],
         },
     )
     .await
+}
+
+/// Run the client in pull mode (connects to a server to receive files) with explicit options.
+///
+/// # Errors
+///
+/// Returns an error if the connection fails or synchronization fails.
+pub async fn run_pull_client_with_options(
+    addr: &str,
+    dst_root: &Path,
+    options: RemoteSyncOptions<'_>,
+) -> anyhow::Result<()> {
+    let stream = connect_with_retry(addr).await?;
+    let mut framed = Framed::new(stream, PxsCodec);
+    let client_options = ClientHandlingOptions {
+        show_progress: true,
+        fsync: options.features.fsync,
+        remote_fsync_override: RemoteFsyncOverride::Deny,
+        remote_delete_override: RemoteDeleteOverride::Allow,
+        lz4: Lz4Allowance::Allow,
+        large_file_parallel: false,
+        control_session_gate: None,
+        ignores: Arc::<[String]>::from(options.ignores.to_vec()),
+    };
+    let mut state = perform_initial_handshake(&mut framed, dst_root, &client_options).await?;
+    framed
+        .send(serialize_message(&Message::PullRequest {
+            threshold: options.threshold,
+            checksum: options.features.checksum,
+            delete: options.features.delete,
+            ignores: options.ignores.to_vec(),
+        })?)
+        .await?;
+    let result = handle_client_inner(&mut framed, &mut state, dst_root, client_options).await;
+    if let Err(error) = &result {
+        state.cleanup_partial_files();
+        let _ = framed
+            .send(serialize_message(&Message::Error(format!("{error:#}")))?)
+            .await;
+    }
+    result
 }
 
 /// Run the receiver to handle incoming sync connections.
@@ -407,10 +470,12 @@ pub async fn run_pull_client(addr: &str, dst_root: &Path, fsync: bool) -> anyhow
 /// Returns an error if the listener fails to bind or synchronization fails.
 pub async fn run_receiver(addr: &str, dst_root: &Path, fsync: bool) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
-    eprintln!("Receiver listening on {addr}");
+    tracing::info!("Receiver listening on {addr}");
+    let control_session_gate = Arc::new(Semaphore::new(1));
     while let Ok((stream, peer_addr)) = listener.accept().await {
-        eprintln!("Accepted connection from {peer_addr}");
+        tracing::debug!("Accepted connection from {peer_addr}");
         let dst_root = dst_root.to_path_buf();
+        let control_session_gate = Arc::clone(&control_session_gate);
         tokio::spawn(async move {
             let mut framed = Framed::new(stream, PxsCodec);
             if let Err(error) = handle_client_with_transport(
@@ -420,17 +485,18 @@ pub async fn run_receiver(addr: &str, dst_root: &Path, fsync: bool) -> anyhow::R
                     show_progress: false,
                     fsync,
                     remote_fsync_override: RemoteFsyncOverride::Allow,
-                    remote_delete_override: RemoteDeleteOverride::Deny,
+                    remote_delete_override: RemoteDeleteOverride::Allow,
                     lz4: Lz4Allowance::Allow,
                     large_file_parallel: true,
+                    control_session_gate: Some(control_session_gate),
                     ignores: Arc::from(Vec::<String>::new()),
                 },
             )
             .await
             {
-                eprintln!("Error handling client {peer_addr}: {error}");
+                tracing::error!("Error handling client {peer_addr}: {error}");
             }
-            eprintln!("Connection with {peer_addr} closed");
+            tracing::debug!("Connection with {peer_addr} closed");
         });
     }
     Ok(())
@@ -461,6 +527,7 @@ pub async fn run_stdio_receiver(
             remote_delete_override: RemoteDeleteOverride::Allow,
             lz4: Lz4Allowance::Deny,
             large_file_parallel: true,
+            control_session_gate: None,
             ignores: Arc::<[String]>::from(ignores.to_vec()),
         },
     )
@@ -598,6 +665,7 @@ pub async fn run_ssh_receiver(
             remote_delete_override: RemoteDeleteOverride::Allow,
             lz4: Lz4Allowance::Deny,
             large_file_parallel: false,
+            control_session_gate: None,
             ignores: Arc::<[String]>::from(options.ignores.to_vec()),
         },
     )
@@ -1143,6 +1211,7 @@ where
     }
 
     if state.protocol_state == ProtocolState::AwaitingTransfer {
+        state.ensure_control_session(options.control_session_gate.as_ref())?;
         state.protocol_state = ProtocolState::InTransfer;
     }
 
@@ -1221,6 +1290,7 @@ where
         | Message::RequestBlocks { .. }
         | Message::RequestParallelBlocks { .. }
         | Message::ChunkWriterStart { .. }
+        | Message::PullRequest { .. }
         | Message::MetadataApplied { .. }
         | Message::ChecksumVerified { .. }
         | Message::ChecksumMismatch { .. }
@@ -1392,6 +1462,7 @@ where
             remote_delete_override: RemoteDeleteOverride::Deny,
             lz4: Lz4Allowance::Deny,
             large_file_parallel: true,
+            control_session_gate: None,
             ignores: Arc::from(Vec::<String>::new()),
         },
     )
@@ -1407,18 +1478,50 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     let mut state = ClientState::new(dst_root);
-
-    let result = handle_client_inner(framed, &mut state, dst_root, options).await;
+    let result = async {
+        state = perform_initial_handshake(framed, dst_root, &options).await?;
+        handle_client_inner(framed, &mut state, dst_root, options).await
+    }
+    .await;
 
     if let Err(error) = &result {
         state.cleanup_partial_files();
-        // Best effort error reporting to the sender
         let _ = framed
             .send(serialize_message(&Message::Error(format!("{error:#}")))?)
             .await;
     }
 
     result
+}
+
+async fn perform_initial_handshake<T>(
+    framed: &mut Framed<T, PxsCodec>,
+    dst_root: &Path,
+    options: &ClientHandlingOptions,
+) -> anyhow::Result<ClientState>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut state = ClientState::new(dst_root);
+    let bytes = recv_with_timeout(framed)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("connection closed during handshake"))?;
+    let msg = deserialize_message(&bytes)?;
+    match msg {
+        Message::Handshake { version } => {
+            tracing::debug!("Client connected (version: {version})");
+            state.transport = handle_handshake(
+                framed,
+                version,
+                matches!(options.lz4, Lz4Allowance::Allow),
+                options.large_file_parallel,
+            )
+            .await?;
+            state.protocol_state = ProtocolState::AwaitingTransfer;
+            Ok(state)
+        }
+        other => anyhow::bail!("expected handshake before transfer messages, got {other:?}"),
+    }
 }
 
 async fn handle_client_inner<T>(

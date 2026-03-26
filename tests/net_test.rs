@@ -2380,6 +2380,15 @@ async fn test_run_sender_forwards_fsync_session_option_for_tcp_push() -> anyhow:
         let sync_dir = framed
             .next()
             .await
+            .ok_or_else(|| anyhow::anyhow!("missing sync start"))??;
+        match net::deserialize_message(&sync_dir)? {
+            Message::SyncStart { .. } => {}
+            other => anyhow::bail!("expected SyncStart, got {other:?}"),
+        }
+
+        let sync_dir = framed
+            .next()
+            .await
             .ok_or_else(|| anyhow::anyhow!("missing directory task"))??;
         match net::deserialize_message(&sync_dir)? {
             Message::SyncDir { path, .. } => assert_eq!(path, "nested"),

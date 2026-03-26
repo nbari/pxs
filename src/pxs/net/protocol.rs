@@ -76,6 +76,12 @@ pub enum Message {
         fsync: bool,
         delete: bool,
     },
+    PullRequest {
+        threshold: f32,
+        checksum: bool,
+        delete: bool,
+        ignores: Vec<String>,
+    },
     ParallelTransferConfig {
         threshold_bytes: u64,
         worker_count: u16,

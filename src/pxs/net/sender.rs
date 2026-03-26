@@ -21,6 +21,7 @@ use std::{os::unix::fs::FileExt, path::Path, sync::Arc};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
+    sync::{OwnedSemaphorePermit, Semaphore},
 };
 use tokio_util::codec::Framed;
 
@@ -55,11 +56,17 @@ struct ParallelSenderOptions {
 }
 
 #[derive(Clone)]
-struct RawSenderWorkerOptions {
+struct ServeRequestDefaults {
     threshold: f32,
     checksum: bool,
-    fsync: bool,
-    parallel: Option<ParallelSenderOptions>,
+    ignores: Arc<[String]>,
+}
+
+struct PullRequestOptions {
+    threshold: f32,
+    checksum: bool,
+    delete: bool,
+    ignores: Arc<[String]>,
 }
 
 /// Run the listener in sender mode (serves files to clients).
@@ -75,163 +82,115 @@ pub async fn run_sender_listener(
     ignores: &[String],
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
-    eprintln!("Sender listener listening on {addr}");
-    let ignores = Arc::<[String]>::from(ignores.to_vec());
+    tracing::info!("Sender listener listening on {addr}");
+    let defaults = ServeRequestDefaults {
+        threshold,
+        checksum,
+        ignores: Arc::<[String]>::from(ignores.to_vec()),
+    };
+    let control_session_gate = Arc::new(Semaphore::new(1));
 
     while let Ok((stream, peer_addr)) = listener.accept().await {
-        eprintln!("Accepted connection from {peer_addr}");
+        tracing::debug!("Accepted connection from {peer_addr}");
         let src_root = src_root.to_path_buf();
-        let ignores = Arc::clone(&ignores);
+        let defaults = defaults.clone();
+        let control_session_gate = Arc::clone(&control_session_gate);
 
         tokio::spawn(async move {
-            let (tasks, total_size) = match collect_sync_tasks(&src_root, ignores.as_ref()).await {
-                Ok(sync_plan) => sync_plan,
-                Err(error) => {
-                    eprintln!("Error collecting sync tasks for client {peer_addr}: {error}");
-                    return;
-                }
-            };
-            let pb = Arc::new(tools::create_progress_bar(total_size));
             let mut framed = Framed::new(stream, PxsCodec);
-            if let Err(error) = sender_loop(
-                &mut framed,
-                &src_root,
-                SenderLoopOptions {
-                    threshold,
-                    checksum,
-                    session: SessionOptionFlags {
-                        fsync: false,
-                        delete: false,
-                    },
-                    allow_lz4: true,
-                    large_file_parallel: None,
-                },
-                &tasks,
-                pb,
-            )
-            .await
+            if let Err(error) =
+                serve_client_session(&mut framed, &src_root, defaults, control_session_gate).await
             {
-                eprintln!("Error serving client {peer_addr}: {error}");
+                tracing::error!("Error serving client {peer_addr}: {error}");
             }
-            eprintln!("Served client {peer_addr}");
+            tracing::debug!("Served client {peer_addr}");
         });
     }
 
     Ok(())
 }
 
-async fn send_non_file_tasks<T>(
+fn default_pull_request(defaults: &ServeRequestDefaults) -> PullRequestOptions {
+    PullRequestOptions {
+        threshold: defaults.threshold,
+        checksum: defaults.checksum,
+        delete: false,
+        ignores: Arc::clone(&defaults.ignores),
+    }
+}
+
+async fn receive_pull_request<T>(
     framed: &mut Framed<T, PxsCodec>,
-    tasks: &[SyncTask],
+    defaults: &ServeRequestDefaults,
+) -> anyhow::Result<PullRequestOptions>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
+    let Some(bytes) = recv_with_timeout(framed).await? else {
+        return Ok(default_pull_request(defaults));
+    };
+    match deserialize_message(&bytes)? {
+        Message::PullRequest {
+            threshold,
+            checksum,
+            delete,
+            ignores,
+        } => Ok(PullRequestOptions {
+            threshold,
+            checksum,
+            delete,
+            ignores: Arc::<[String]>::from(ignores),
+        }),
+        Message::Error(message) => anyhow::bail!("pull client error: {message}"),
+        other => anyhow::bail!("expected pull request after handshake, got {other:?}"),
+    }
+}
+
+fn acquire_control_session(
+    control_session_gate: &Arc<Semaphore>,
+) -> anyhow::Result<OwnedSemaphorePermit> {
+    Arc::clone(control_session_gate)
+        .try_acquire_owned()
+        .map_err(|_| anyhow::anyhow!("another sync session is already active for this root"))
+}
+
+async fn serve_client_session<T>(
+    framed: &mut Framed<T, PxsCodec>,
+    src_root: &Path,
+    defaults: ServeRequestDefaults,
+    control_session_gate: Arc<Semaphore>,
 ) -> anyhow::Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    for task in tasks {
-        match task {
-            SyncTask::Dir { path, metadata } => {
-                framed
-                    .send(serialize_message(&Message::SyncDir {
-                        path: path.clone(),
-                        metadata: *metadata,
-                    })?)
-                    .await?;
-            }
-            SyncTask::Symlink {
-                path,
-                target,
-                metadata,
-            } => {
-                framed
-                    .send(serialize_message(&Message::SyncSymlink {
-                        path: path.clone(),
-                        target: target.clone(),
-                        metadata: *metadata,
-                    })?)
-                    .await?;
-            }
-            SyncTask::File { .. } => {}
-        }
-    }
+    let features = sender_handshake(framed, true, false).await?;
+    let request = receive_pull_request(framed, &defaults).await?;
+    anyhow::ensure!(
+        !request.delete || src_root.is_dir(),
+        "--delete is only supported when syncing directories"
+    );
+    let _control_session = acquire_control_session(&control_session_gate)?;
+    let (tasks, total_size) = collect_sync_tasks(src_root, request.ignores.as_ref()).await?;
+    let progress = Arc::new(tools::create_progress_bar(total_size));
 
-    framed.flush().await?;
-    Ok(())
-}
-
-fn collect_file_paths(tasks: &[SyncTask]) -> Vec<String> {
-    tasks
-        .iter()
-        .filter_map(|task| match task {
-            SyncTask::File { path } => Some(path.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-fn build_worker_batches(
-    file_paths: Vec<String>,
-    worker_count: usize,
-) -> anyhow::Result<Vec<Vec<String>>> {
-    let mut batches = vec![Vec::new(); worker_count];
-    for (index, rel_path) in file_paths.into_iter().enumerate() {
-        let batch_index = index % worker_count;
-        let batch = batches
-            .get_mut(batch_index)
-            .ok_or_else(|| anyhow::anyhow!("missing worker batch {batch_index}"))?;
-        batch.push(rel_path);
-    }
-    Ok(batches)
-}
-
-async fn run_sender_workers(
-    addr: &str,
-    src_root: &Path,
-    options: RawSenderWorkerOptions,
-    progress: &Arc<ProgressBar>,
-    batches: Vec<Vec<String>>,
-) -> anyhow::Result<()> {
-    let mut workers = Vec::with_capacity(batches.len());
-    for batch in batches {
-        let addr_owned = addr.to_string();
-        let src_root_worker = src_root.to_path_buf();
-        let progress_worker = Arc::clone(progress);
-        let worker_options = options.clone();
-
-        workers.push(tokio::spawn(async move {
-            let stream = connect_with_retry(&addr_owned).await?;
-            let mut framed = Framed::new(stream, PxsCodec);
-            let features =
-                sender_handshake(&mut framed, true, worker_options.parallel.is_some()).await?;
-            send_push_session_options(&mut framed, worker_options.fsync, false).await?;
-            send_parallel_transfer_config(&mut framed, worker_options.parallel.clone(), features)
-                .await?;
-
-            for rel_path in batch {
-                let src_path = source_path_for(&src_root_worker, &rel_path);
-                sync_remote_file_with_features(
-                    &mut framed,
-                    &src_root_worker,
-                    &src_path,
-                    RemoteFileSyncOptions {
-                        threshold: worker_options.threshold,
-                        checksum: worker_options.checksum,
-                        progress: Arc::clone(&progress_worker),
-                        features,
-                        parallel: worker_options.parallel.clone(),
-                    },
-                )
-                .await?;
-            }
-
-            Ok::<(), anyhow::Error>(())
-        }));
-    }
-
-    for worker in workers {
-        worker.await??;
-    }
-
-    Ok(())
+    sender_transfer_loop(
+        framed,
+        src_root,
+        SenderLoopOptions {
+            threshold: request.threshold,
+            checksum: request.checksum,
+            session: SessionOptionFlags {
+                fsync: false,
+                delete: request.delete,
+            },
+            allow_lz4: true,
+            large_file_parallel: None,
+        },
+        &tasks,
+        progress,
+        features,
+    )
+    .await
 }
 
 /// Run the sender to coordinate the client-side sync.
@@ -264,26 +223,40 @@ pub async fn run_sender_with_options(
     ignores: &[String],
     large_file_parallel: Option<LargeFileParallelOptions>,
 ) -> anyhow::Result<()> {
-    let (tasks, total_size) = collect_sync_tasks(src_root, ignores).await?;
+    run_sender_with_features(
+        addr,
+        src_root,
+        RemoteSyncOptions {
+            threshold,
+            features: super::RemoteFeatureOptions {
+                checksum,
+                delete: false,
+                fsync,
+            },
+            large_file_parallel,
+            ignores,
+        },
+    )
+    .await
+}
+
+/// Run the sender with explicit remote session options such as `delete`.
+///
+/// # Errors
+///
+/// Returns an error if the connection fails or synchronization fails.
+pub async fn run_sender_with_features(
+    addr: &str,
+    src_root: &Path,
+    options: RemoteSyncOptions<'_>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !options.features.delete || src_root.is_dir(),
+        "--delete is only supported when syncing directories"
+    );
+    let (tasks, total_size) = collect_sync_tasks(src_root, options.ignores).await?;
     let progress = Arc::new(tools::create_progress_bar(total_size));
-
-    let has_non_file_tasks = tasks
-        .iter()
-        .any(|task| !matches!(task, SyncTask::File { .. }));
-
-    let main_framed = if has_non_file_tasks {
-        let stream = connect_with_retry(addr).await?;
-        let mut framed = Framed::new(stream, PxsCodec);
-        let _ = sender_handshake(&mut framed, true, false).await?;
-        send_push_session_options(&mut framed, fsync, false).await?;
-        send_non_file_tasks(&mut framed, &tasks).await?;
-        Some(framed)
-    } else {
-        None::<Framed<TcpStream, PxsCodec>>
-    };
-
-    let file_paths = collect_file_paths(&tasks);
-    let large_file_parallel = large_file_parallel.map(
+    let large_file_parallel = options.large_file_parallel.map(
         |LargeFileParallelOptions {
              threshold_bytes,
              worker_count,
@@ -295,38 +268,25 @@ pub async fn run_sender_with_options(
             },
         },
     );
-
-    if file_paths.is_empty() {
-        if let Some(mut framed) = main_framed {
-            finish_control_connection(&mut framed).await?;
-        }
-        progress.finish_with_message("Done");
-        return Ok(());
-    }
-
-    let worker_count = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(8)
-        .min(64)
-        .min(file_paths.len());
-    let batches = build_worker_batches(file_paths, worker_count)?;
-    run_sender_workers(
-        addr,
+    let stream = connect_with_retry(addr).await?;
+    let mut framed = Framed::new(stream, PxsCodec);
+    sender_loop(
+        &mut framed,
         src_root,
-        RawSenderWorkerOptions {
-            threshold,
-            checksum,
-            fsync,
-            parallel: large_file_parallel,
+        SenderLoopOptions {
+            threshold: options.threshold,
+            checksum: options.features.checksum,
+            session: SessionOptionFlags {
+                fsync: options.features.fsync,
+                delete: options.features.delete,
+            },
+            allow_lz4: true,
+            large_file_parallel,
         },
-        &progress,
-        batches,
+        &tasks,
+        Arc::clone(&progress),
     )
     .await?;
-    if let Some(mut framed) = main_framed {
-        finish_control_connection(&mut framed).await?;
-    }
-
     progress.finish_with_message("Done");
     Ok(())
 }
@@ -533,6 +493,20 @@ where
         options.large_file_parallel.is_some(),
     )
     .await?;
+    sender_transfer_loop(framed, src_root, options, tasks, progress, features).await
+}
+
+async fn sender_transfer_loop<T>(
+    framed: &mut Framed<T, PxsCodec>,
+    src_root: &Path,
+    options: SenderLoopOptions,
+    tasks: &[SyncTask],
+    progress: Arc<ProgressBar>,
+    features: TransportFeatures,
+) -> anyhow::Result<()>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
     send_push_session_options(framed, options.session.fsync, options.session.delete).await?;
     send_parallel_transfer_config(framed, options.large_file_parallel.clone(), features).await?;
 

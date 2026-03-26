@@ -42,10 +42,10 @@ pub use protocol::{
     Block, FileMetadata, Message, apply_file_metadata, deserialize_message, serialize_message,
 };
 pub use receiver::{
-    handle_client, run_pull_client, run_receiver, run_ssh_receiver, run_stdio_chunk_writer,
-    run_stdio_receiver,
+    handle_client, run_pull_client, run_pull_client_with_options, run_receiver, run_ssh_receiver,
+    run_stdio_chunk_writer, run_stdio_receiver,
 };
 pub use sender::{
-    run_sender, run_sender_listener, run_sender_with_options, run_ssh_sender, run_stdio_sender,
-    sync_remote_file,
+    run_sender, run_sender_listener, run_sender_with_features, run_sender_with_options,
+    run_ssh_sender, run_stdio_sender, sync_remote_file,
 };

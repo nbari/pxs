@@ -17,12 +17,12 @@ const LONG_ABOUT: &str = "pxs is a file synchronization tool for the same broad 
     EXAMPLES:\n\n\
     1. Local Sync (File or Directory):\n\
        pxs sync /data/old /data/new\n\n\
-    2. Network Sync - Receiver (Server 2):\n\
+    2. SSH Sync:\n\
+       pxs sync /data/old user@db2:/data/new\n\n\
+    3. Network Sync - Receiver (Server 2):\n\
        pxs listen 0.0.0.0:8080 /new/pgdata\n\n\
-    3. Network Sync - Sender (Server 1):\n\
-       pxs push /old/pgdata 192.168.1.10:8080\n\n\
-    4. Pull Mode (SSH):\n\
-       pxs pull user@server:/data ./local\n\n\
+    4. Raw TCP Sync:\n\
+       pxs sync /old/pgdata 192.168.1.10:8080\n\n\
     5. Force Content Verification (Checksum):\n\
        pxs sync file.bin copy.bin --checksum\n\n\
     SUPPORTED PLATFORMS:\n\
@@ -258,6 +258,13 @@ fn src_arg() -> Arg {
         .required(true)
 }
 
+fn sync_operand_arg(id: &'static str, help: &'static str, value_name: &'static str) -> Arg {
+    Arg::new(id)
+        .help(help)
+        .value_name(value_name)
+        .required(true)
+}
+
 fn dst_arg() -> Arg {
     Arg::new("dst")
         .help("Path to the destination file or directory")
@@ -330,15 +337,17 @@ fn internal_stdio_args() -> [Arg; 13] {
 
 fn sync_command() -> Command {
     Command::new("sync")
-        .about("Synchronize a local source into a local destination")
+        .about("Synchronize between local paths, SSH endpoints, or raw TCP listeners/servers")
         .args([
-            src_arg(),
-            dst_arg(),
+            sync_operand_arg("src", "Source path or remote endpoint", "SRC"),
+            sync_operand_arg("dst", "Destination path or remote endpoint", "DST"),
             threshold_arg(false),
             checksum_arg(false),
             fsync_arg(false),
             dry_run_arg(),
             delete_arg(),
+            large_file_parallel_threshold_arg(),
+            large_file_parallel_workers_arg(),
             ignore_arg(false),
             exclude_from_arg(false),
         ])

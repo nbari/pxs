@@ -31,7 +31,7 @@ pub(crate) async fn connect_with_retry(addr: &str) -> anyhow::Result<TcpStream> 
                 last_error = Some(e);
                 if attempt + 1 < MAX_RETRIES {
                     let backoff = Duration::from_millis(INITIAL_BACKOFF_MS << attempt);
-                    eprintln!(
+                    tracing::warn!(
                         "Connection to {addr} failed, retrying in {}ms... (attempt {}/{})",
                         backoff.as_millis(),
                         attempt + 1,
