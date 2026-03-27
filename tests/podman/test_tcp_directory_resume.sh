@@ -80,7 +80,7 @@ $DOCKER run --name pxs-tree-sender \
     -v "$(pwd)/target/release/pxs:/usr/local/bin/pxs:ro" \
     -v "$SRC_DIR:/src:ro" \
     "$IMAGE" \
-    bash -lc "pxs sync pxs-tree-receiver:$PORT /src -vv"
+    bash -lc "pxs sync /src pxs-tree-receiver:$PORT -vv"
 
 if [ "$(sha256sum "$DST_DIR/resume.bin" | awk '{print $1}')" != "$RESUME_HASH" ]; then
     echo "resume.bin hash mismatch after resume sync"

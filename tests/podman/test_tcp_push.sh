@@ -64,7 +64,7 @@ $DOCKER run --name pxs-tcp-sender \
     -v "$(pwd)/target/release/pxs:/usr/local/bin/pxs:ro" \
     -v "$SRC_DIR:/src:ro" \
     "$IMAGE" \
-    bash -lc "pxs sync pxs-tcp-receiver:$PORT/test.bin /src/test.bin -vv"
+    bash -lc "pxs sync /src/test.bin pxs-tcp-receiver:$PORT/test.bin -vv"
 
 # Verify copied bytes on the host bind mount
 if [ ! -f "$DEST_FILE" ]; then

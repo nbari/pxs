@@ -61,7 +61,7 @@ $DOCKER run --name pxs-ssh-parallel-client \
              chmod 600 /home/devops/.ssh/id_ed25519 && \
              echo -e 'Host pxs-ssh-parallel-server\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/id_ed25519' > /home/devops/.ssh/config && \
              chown devops:devops /home/devops/.ssh/config && \
-             sudo -u devops pxs sync \"devops@pxs-ssh-parallel-server:$REMOTE_FILE\" /src/large.bin \
+             sudo -u devops pxs sync /src/large.bin \"devops@pxs-ssh-parallel-server:$REMOTE_FILE\" \
              --fsync \
              -vv"
 
@@ -107,7 +107,7 @@ $DOCKER run --name pxs-ssh-parallel-client \
              chmod 600 /home/devops/.ssh/id_ed25519 && \
              echo -e 'Host pxs-ssh-parallel-server\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/id_ed25519' > /home/devops/.ssh/config && \
              chown devops:devops /home/devops/.ssh/config && \
-             sudo -u devops pxs sync \"devops@pxs-ssh-parallel-server:$REMOTE_PARALLEL_DIR\" /src/large.bin \
+             sudo -u devops pxs sync /src/large.bin \"devops@pxs-ssh-parallel-server:$REMOTE_PARALLEL_DIR\" \
              --fsync \
              --large-file-parallel-threshold 1MiB \
              --large-file-parallel-workers 2 \

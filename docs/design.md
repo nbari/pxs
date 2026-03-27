@@ -29,10 +29,10 @@ Non-goals remain important:
 The public sync interface is:
 
 ```bash
-pxs sync DEST SRC
+pxs sync SRC DST
 ```
 
-Where `DEST` and `SRC` can be:
+Where `SRC` and `DST` can be:
 
 - local filesystem paths
 - SSH endpoints like `user@host:/path`

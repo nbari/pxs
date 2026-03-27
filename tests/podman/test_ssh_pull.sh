@@ -61,7 +61,7 @@ $DOCKER run --name pxs-client \
              touch -d '$SYNC_TIME' /data/same.bin && \
              echo -e 'Host pxs-server\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/id_ed25519' > /home/devops/.ssh/config && \
              chown devops:devops /home/devops/.ssh/config && \
-             sudo -u devops pxs sync /data \"devops@pxs-server:$REMOTE_ROOT\" \
+             sudo -u devops pxs sync \"devops@pxs-server:$REMOTE_ROOT\" /data \
              --checksum \
              --ignore '*.tmp' \
              -vv && \

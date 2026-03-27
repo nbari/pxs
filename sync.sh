@@ -183,8 +183,8 @@ run_preflight() {
 run_pxs_sync() {
   # Repeated runs are expected to get faster as the destination converges
   # because pxs skips unchanged files and can send deltas for changed ones.
-  echo "[*] pxs sync: $DST_HOST:$DST_PGDATA <- $SRC_PGDATA (--delete, no --fsync)"
-  "$PXS_BIN" sync "$DST_HOST:$DST_PGDATA" "$SRC_PGDATA" "${PXS_SYNC_ARGS[@]}"
+  echo "[*] pxs sync: $SRC_PGDATA -> $DST_HOST:$DST_PGDATA (--delete, no --fsync)"
+  "$PXS_BIN" sync "$SRC_PGDATA" "$DST_HOST:$DST_PGDATA" "${PXS_SYNC_ARGS[@]}"
 }
 
 # Preflight first so we fail fast on missing tools, unsupported pxs builds, or

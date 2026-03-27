@@ -71,11 +71,11 @@ The binary will be available at `./target/release/pxs`.
 The public sync model is:
 
 ```bash
-pxs sync DEST SRC
+pxs sync SRC DST
 ```
 
-The first operand is always the destination. The second operand is always the
-source.
+The first operand is always the source. The second operand is always the
+destination.
 
 `DEST` and `SRC` can be:
 
@@ -87,29 +87,29 @@ source.
 
 ```bash
 # File -> file
-pxs sync backup/base.tar.zst snapshot/base.tar.zst
+pxs sync snapshot/base.tar.zst backup/base.tar.zst
 
 # Directory -> directory
-pxs sync /srv/restore/pgdata /var/lib/postgresql/data
+pxs sync /var/lib/postgresql/data /srv/restore/pgdata
 
 # Exact mirror with checksum validation and delete
-pxs sync /srv/restore/pgdata /var/lib/postgresql/data --checksum --delete
+pxs sync /var/lib/postgresql/data /srv/restore/pgdata --checksum --delete
 ```
 
 ### SSH Examples
 
 ```bash
 # Remote file -> local file
-pxs sync ./snapshot.bin user@db2:/srv/export/snapshot.bin
+pxs sync user@db2:/srv/export/snapshot.bin ./snapshot.bin
 
 # Local file -> remote file
-pxs sync user@db2:/srv/incoming/snapshot.bin ./snapshot.bin
+pxs sync ./snapshot.bin user@db2:/srv/incoming/snapshot.bin
 
 # Remote directory -> local directory
-pxs sync /srv/restore/pgdata user@db2:/srv/export/pgdata
+pxs sync user@db2:/srv/export/pgdata /srv/restore/pgdata
 
 # Local directory -> remote directory
-pxs sync user@db2:/srv/incoming/pgdata /var/lib/postgresql/data
+pxs sync /var/lib/postgresql/data user@db2:/srv/incoming/pgdata
 ```
 
 > [!IMPORTANT]
@@ -123,16 +123,16 @@ the remote side.
 
 ```bash
 # Remote file -> local file
-pxs sync ./snapshot.bin 192.168.1.10:8080/snapshots/base.tar.zst
+pxs sync 192.168.1.10:8080/snapshots/base.tar.zst ./snapshot.bin
 
 # Local file -> remote file
-pxs sync 192.168.1.10:8080/incoming/snapshot.bin ./snapshot.bin
+pxs sync ./snapshot.bin 192.168.1.10:8080/incoming/snapshot.bin
 
 # Remote directory -> local directory
-pxs sync /srv/restore/pgdata 192.168.1.10:8080/pgdata
+pxs sync 192.168.1.10:8080/pgdata /srv/restore/pgdata
 
 # Local directory -> remote directory
-pxs sync 192.168.1.10:8080/incoming/pgdata /var/lib/postgresql/data
+pxs sync /var/lib/postgresql/data 192.168.1.10:8080/incoming/pgdata
 ```
 
 ## Raw TCP Setup
@@ -147,8 +147,8 @@ pxs listen 0.0.0.0:8080 /srv --fsync
 Then sync into a path beneath that root:
 
 ```bash
-pxs sync 192.168.1.10:8080/incoming/snapshot.bin ./snapshot.bin
-pxs sync 192.168.1.10:8080/incoming/pgdata /var/lib/postgresql/data --delete
+pxs sync ./snapshot.bin 192.168.1.10:8080/incoming/snapshot.bin
+pxs sync /var/lib/postgresql/data 192.168.1.10:8080/incoming/pgdata --delete
 ```
 
 Use `serve` on the source host to expose an allowed source root:
@@ -161,8 +161,8 @@ pxs serve 0.0.0.0:8080 /srv/export --checksum
 Then sync from a path beneath that root:
 
 ```bash
-pxs sync ./snapshot.bin 192.168.1.10:8080/snapshots/base.tar.zst
-pxs sync /srv/restore/pgdata 192.168.1.10:8080/pgdata --checksum
+pxs sync 192.168.1.10:8080/snapshots/base.tar.zst ./snapshot.bin
+pxs sync 192.168.1.10:8080/pgdata /srv/restore/pgdata --checksum
 ```
 
 The `host:port/path` suffix selects what to read or write inside the configured
@@ -268,7 +268,7 @@ benchmarking:
 ## PostgreSQL Helper
 
 This repository includes [`sync.sh`](./sync.sh), a PostgreSQL-oriented helper
-for repeated SSH `pxs sync DEST SRC` passes around `pg_backup_start()` and
+for repeated SSH `pxs sync SRC DST` passes around `pg_backup_start()` and
 `pg_backup_stop()`.
 
 It is useful when evaluating `pxs` on the workload it was originally built to

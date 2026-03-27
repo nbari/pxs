@@ -25,7 +25,7 @@ echo -e "${BLUE}Benchmark scope: large local file sync with identical correctnes
 echo -e "\n${GREEN}--- Initial Sync (Full Copy) ---${NC}"
 
 echo -e "${BLUE}Running pxs...${NC}"
-time $PXS_BIN sync $DST_PXS $SRC
+time $PXS_BIN sync $SRC $DST_PXS
 
 echo -e "\n${BLUE}Running rsync...${NC}"
 time rsync -ah --progress $SRC $DST_RSYNC
@@ -36,7 +36,7 @@ echo -e "${BLUE}Modifying one 64KB block in the middle of source...${NC}"
 dd if=/dev/zero of=$SRC bs=64K count=1 seek=8192 conv=notrunc
 
 echo -e "\n${BLUE}Running pxs (Incremental)...${NC}"
-time $PXS_BIN sync $DST_PXS $SRC
+time $PXS_BIN sync $SRC $DST_PXS
 
 echo -e "\n${BLUE}Running rsync (Incremental)...${NC}"
 time rsync -ah --inplace --no-whole-file --progress $SRC $DST_RSYNC
@@ -44,7 +44,7 @@ time rsync -ah --inplace --no-whole-file --progress $SRC $DST_RSYNC
 echo -e "\n${GREEN}--- Metadata Sync (No Change - should be instant) ---${NC}"
 
 echo -e "${BLUE}Running pxs (No change)...${NC}"
-time $PXS_BIN sync $DST_PXS $SRC
+time $PXS_BIN sync $SRC $DST_PXS
 
 echo -e "\n${BLUE}Running rsync (No change)...${NC}"
 time rsync -ah --inplace --no-whole-file --progress $SRC $DST_RSYNC

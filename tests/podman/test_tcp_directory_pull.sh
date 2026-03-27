@@ -59,7 +59,7 @@ $DOCKER run --name pxs-tcp-dir-client \
     -v "$(pwd)/target/release/pxs:/usr/local/bin/pxs:ro" \
     -v "$DST_DIR:/data" \
     "$IMAGE" \
-    bash -lc "pxs sync /data pxs-tcp-dir-source:$PORT/dataset --delete --checksum --ignore '*.tmp' -vv"
+    bash -lc "pxs sync pxs-tcp-dir-source:$PORT/dataset /data --delete --checksum --ignore '*.tmp' -vv"
 
 if [ "$(cat "$DST_DIR/same.bin")" != "source payload 123" ]; then
     echo "TCP directory pull did not refresh same.bin under checksum mode"

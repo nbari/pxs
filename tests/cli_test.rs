@@ -1,6 +1,7 @@
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use pxs::pxs::net::{self, Message};
+use std::path::Path;
 use std::process::{Command, Output};
 use tempfile::tempdir;
 use tokio::net::TcpListener;
@@ -8,6 +9,14 @@ use tokio_util::codec::Framed;
 
 fn run_pxs(args: &[&str]) -> Result<Output> {
     Command::new(env!("CARGO_BIN_EXE_pxs"))
+        .args(args)
+        .output()
+        .map_err(Into::into)
+}
+
+fn run_pxs_in_dir(dir: &Path, args: &[&str]) -> Result<Output> {
+    Command::new(env!("CARGO_BIN_EXE_pxs"))
+        .current_dir(dir)
         .args(args)
         .output()
         .map_err(Into::into)
@@ -96,8 +105,8 @@ fn test_verbose_flag_enables_debug_output() -> Result<()> {
     let src_arg = src.to_string_lossy().to_string();
     let dst_arg = dst.to_string_lossy().to_string();
 
-    let base = run_pxs(&["sync", &dst_arg, &src_arg])?;
-    let verbose = run_pxs(&["-vv", "sync", &dst_arg, &src_arg])?;
+    let base = run_pxs(&["sync", &src_arg, &dst_arg])?;
+    let verbose = run_pxs(&["-vv", "sync", &src_arg, &dst_arg])?;
 
     assert!(!stderr_text(&base).contains("Dispatching action:"));
     assert!(stderr_text(&verbose).contains("Dispatching action:"));
@@ -113,7 +122,7 @@ fn test_sync_local_file_end_to_end() -> Result<()> {
 
     let src_arg = src.to_string_lossy().to_string();
     let dst_arg = dst.to_string_lossy().to_string();
-    let output = run_pxs(&["sync", &dst_arg, &src_arg, "--quiet"])?;
+    let output = run_pxs(&["sync", &src_arg, &dst_arg, "--quiet"])?;
 
     assert!(output.status.success(), "{}", stderr_text(&output));
     assert_eq!(std::fs::read_to_string(&dst)?, "local file payload");
@@ -134,7 +143,7 @@ fn test_sync_local_directory_delete_end_to_end() -> Result<()> {
 
     let src_arg = src.to_string_lossy().to_string();
     let dst_arg = dst.to_string_lossy().to_string();
-    let output = run_pxs(&["sync", &dst_arg, &src_arg, "--delete", "--quiet"])?;
+    let output = run_pxs(&["sync", &src_arg, &dst_arg, "--delete", "--quiet"])?;
 
     assert!(output.status.success(), "{}", stderr_text(&output));
     assert_eq!(std::fs::read_to_string(dst.join("keep.txt"))?, "fresh");
@@ -143,6 +152,31 @@ fn test_sync_local_directory_delete_end_to_end() -> Result<()> {
         "nested-fresh"
     );
     assert!(!dst.join("stale").exists());
+    Ok(())
+}
+
+#[test]
+fn test_sync_local_source_first_current_directory_end_to_end() -> Result<()> {
+    let dir = tempdir()?;
+    let src = dir.path().join("src");
+    let dst = dir.path().join("dst");
+    std::fs::create_dir_all(src.join("nested"))?;
+    std::fs::write(src.join("root.txt"), "root-payload")?;
+    std::fs::write(src.join("nested/child.txt"), "child-payload")?;
+    std::fs::create_dir_all(&dst)?;
+
+    let dst_arg = dst.to_string_lossy().to_string();
+    let output = run_pxs_in_dir(&src, &["sync", ".", &dst_arg, "--quiet"])?;
+
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert_eq!(
+        std::fs::read_to_string(dst.join("root.txt"))?,
+        "root-payload"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dst.join("nested/child.txt"))?,
+        "child-payload"
+    );
     Ok(())
 }
 

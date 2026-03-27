@@ -34,6 +34,7 @@
 - Keep the public story consistent: `pxs` is an integrity-first sync/clone tool for large mutable datasets, designed to outperform `rsync` in its target workloads.
 - Do not position `pxs` as a general `rsync` replacement or imply full `rsync -aHAXx` parity unless that is actually implemented.
 - Keep `README.md`, `Cargo.toml` description, and CLI `about` text aligned when changing public wording.
+- Keep the public sync order consistent: `pxs sync SRC DST`.
 - Keep the main README operator-focused; move protocol and contributor design detail to `docs/design.md`.
 
 ## Coding Style & Naming Conventions

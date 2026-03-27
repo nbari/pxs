@@ -56,7 +56,7 @@ $DOCKER run --name pxs-ssh-push-client \
              chmod 600 /home/devops/.ssh/id_ed25519 && \
              echo -e 'Host pxs-ssh-push-server\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/id_ed25519' > /home/devops/.ssh/config && \
              chown devops:devops /home/devops/.ssh/config && \
-             sudo -u devops pxs sync \"devops@pxs-ssh-push-server:$REMOTE_ROOT\" /src \
+             sudo -u devops pxs sync /src \"devops@pxs-ssh-push-server:$REMOTE_ROOT\" \
              --ignore '*.tmp' \
              -vv"
 

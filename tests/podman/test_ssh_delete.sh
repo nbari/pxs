@@ -67,7 +67,7 @@ $DOCKER run --name pxs-ssh-delete-push-client \
              chmod 600 /home/devops/.ssh/id_ed25519 && \
              echo -e 'Host pxs-ssh-delete-server\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/id_ed25519' > /home/devops/.ssh/config && \
              chown devops:devops /home/devops/.ssh/config && \
-             sudo -u devops pxs sync \"devops@pxs-ssh-delete-server:$REMOTE_PUSH_DST\" /push-src --delete --fsync -vv"
+             sudo -u devops pxs sync /push-src \"devops@pxs-ssh-delete-server:$REMOTE_PUSH_DST\" --delete --fsync -vv"
 
 $DOCKER exec pxs-ssh-delete-server bash -lc "test -f \"$REMOTE_PUSH_DST/keep.txt\" && \
     test -f \"$REMOTE_PUSH_DST/nested/keep.txt\" && \
@@ -90,7 +90,7 @@ $DOCKER run --name pxs-ssh-delete-pull-client \
              chown -R devops:devops /pull-dst && \
              echo -e 'Host pxs-ssh-delete-server\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/id_ed25519' > /home/devops/.ssh/config && \
              chown devops:devops /home/devops/.ssh/config && \
-             sudo -u devops pxs sync /pull-dst \"devops@pxs-ssh-delete-server:$REMOTE_PULL_SRC\" \
+             sudo -u devops pxs sync \"devops@pxs-ssh-delete-server:$REMOTE_PULL_SRC\" /pull-dst \
              --delete --fsync --ignore '*.tmp' -vv && \
              chmod -R a+rwX /pull-dst"
 

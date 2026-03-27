@@ -15,15 +15,15 @@ const LONG_ABOUT: &str = "pxs is an integrity-first sync and clone tool for \
     refreshes. It is not a drop-in replacement for rsync.\n\n\
     EXAMPLES:\n\n\
     1. Local Sync:\n\
-       pxs sync /srv/restore/pgdata /var/lib/postgresql/data\n\n\
+       pxs sync /var/lib/postgresql/data /srv/restore/pgdata\n\n\
     2. SSH Sync:\n\
-       pxs sync /srv/restore/pgdata user@db2:/srv/export/pgdata\n\n\
+       pxs sync user@db2:/srv/export/pgdata /srv/restore/pgdata\n\n\
     3. Raw TCP Receiver Setup:\n\
        pxs listen 0.0.0.0:8080 /srv\n\n\
     4. Raw TCP Sync:\n\
-       pxs sync 192.168.1.10:8080/incoming/pgdata /var/lib/postgresql/data\n\n\
+       pxs sync /var/lib/postgresql/data 192.168.1.10:8080/incoming/pgdata\n\n\
     5. Verify And Durably Commit:\n\
-       pxs sync backup.bin file.bin --checksum --fsync\n\n\
+       pxs sync file.bin backup.bin --checksum --fsync\n\n\
     SUPPORTED PLATFORMS:\n\
        Linux, macOS, and BSD.\n\
        Windows is not supported.";
@@ -331,10 +331,10 @@ fn internal_stdio_args() -> [Arg; 12] {
 
 fn sync_command() -> Command {
     Command::new("sync")
-        .about("Synchronize into DEST from SRC across local paths, SSH endpoints, or raw TCP")
+        .about("Synchronize from SRC into DST across local paths, SSH endpoints, or raw TCP")
         .args([
-            sync_operand_arg("dst", "Destination path or remote endpoint", "DST"),
             sync_operand_arg("src", "Source path or remote endpoint", "SRC"),
+            sync_operand_arg("dst", "Destination path or remote endpoint", "DST"),
             threshold_arg(false),
             checksum_arg(false),
             fsync_arg(false),
@@ -442,7 +442,7 @@ mod tests {
         std::fs::write(&src, "content")?;
         let src_arg = src.to_string_lossy().to_string();
         let dst_arg = dst.to_string_lossy().to_string();
-        let matches = new().try_get_matches_from(["pxs", "sync", &dst_arg, &src_arg, "-vvv"])?;
+        let matches = new().try_get_matches_from(["pxs", "sync", &src_arg, &dst_arg, "-vvv"])?;
         assert_eq!(matches.get_count("verbose"), 3);
         Ok(())
     }
@@ -457,11 +457,11 @@ mod tests {
         let dst_arg = dst.to_string_lossy().to_string();
 
         let too_small =
-            new().try_get_matches_from(["pxs", "sync", &dst_arg, &src_arg, "--threshold", "0.01"]);
+            new().try_get_matches_from(["pxs", "sync", &src_arg, &dst_arg, "--threshold", "0.01"]);
         assert!(too_small.is_err());
 
         let too_large =
-            new().try_get_matches_from(["pxs", "sync", &dst_arg, &src_arg, "--threshold", "1.5"]);
+            new().try_get_matches_from(["pxs", "sync", &src_arg, &dst_arg, "--threshold", "1.5"]);
         assert!(too_large.is_err());
         Ok(())
     }

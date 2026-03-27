@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 - Clarified the public project objective across the README, crate metadata, CLI help text, and benchmark script wording so `pxs` is consistently described as an integrity-first sync/clone tool for large mutable datasets rather than a general `rsync` replacement.
 - Reworked the README into an operator-focused guide and moved protocol and architecture notes into a dedicated contributor-facing design document.
+- Restored the public `sync` operand order to `pxs sync SRC DST` across local, SSH, and raw TCP flows so the command again follows source-first semantics instead of the newer destination-first model.
 
 ## [0.6.0] - 2026-03-27
 

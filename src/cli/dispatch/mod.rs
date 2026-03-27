@@ -5,8 +5,8 @@ use clap::ArgMatches;
 use std::path::{Path, PathBuf};
 
 const PUBLIC_USAGE_HINT: &str = "public CLI now uses subcommands. Examples: \
-    `pxs sync DST SRC`, `pxs sync DST user@host:/src`, \
-    `pxs sync DST host:port/src`, `pxs listen ADDR ROOT`, `pxs serve ADDR ROOT`.";
+    `pxs sync SRC DST`, `pxs sync user@host:/src DST`, \
+    `pxs sync host:port/src DST`, `pxs listen ADDR ROOT`, `pxs serve ADDR ROOT`.";
 
 /// Main command dispatcher.
 ///
@@ -195,8 +195,8 @@ fn build_sync_action(
 }
 
 fn handle_sync(matches: &ArgMatches, quiet: bool) -> Result<Action> {
-    let dst_text = required_string(matches, "dst")?;
     let src_text = required_string(matches, "src")?;
+    let dst_text = required_string(matches, "dst")?;
     let src = parse_sync_operand(&src_text)?;
     let dst = parse_sync_operand(&dst_text)?;
 
@@ -434,8 +434,8 @@ mod tests {
         let action = parse_action(&[
             "pxs",
             "sync",
-            &dst_arg,
             &src_arg,
+            &dst_arg,
             "--threshold",
             "0.25",
             "--checksum",
@@ -474,9 +474,14 @@ mod tests {
         let src_arg = src.to_string_lossy().to_string();
         let dst_arg = dst.to_string_lossy().to_string();
 
-        let action = parse_action(&["pxs", "sync", &dst_arg, &src_arg])?;
+        let action = parse_action(&["pxs", "sync", &src_arg, &dst_arg])?;
         match action {
-            Action::Sync { threshold, .. } => assert_threshold(threshold, DEFAULT_THRESHOLD),
+            Action::Sync {
+                src: SyncOperand::Local(_),
+                dst: SyncOperand::Local(_),
+                threshold,
+                ..
+            } => assert_threshold(threshold, DEFAULT_THRESHOLD),
             other => anyhow::bail!("expected Action::Sync, got {other:?}"),
         }
 
@@ -892,8 +897,8 @@ mod tests {
         let action = parse_action(&[
             "pxs",
             "sync",
-            &dst_arg,
             &src_arg,
+            &dst_arg,
             "--ignore",
             "*.tmp",
             "--exclude-from",
@@ -920,7 +925,7 @@ mod tests {
         let src_arg = src.to_string_lossy().to_string();
         let dst_arg = dst.to_string_lossy().to_string();
 
-        let action = parse_action(&["pxs", "sync", &dst_arg, "backup:7878/snapshots/base"])?;
+        let action = parse_action(&["pxs", "sync", "backup:7878/snapshots/base", &dst_arg])?;
 
         match action {
             Action::Sync {
@@ -934,7 +939,7 @@ mod tests {
             other => anyhow::bail!("expected TCP source endpoint, got {other:?}"),
         }
 
-        let action = parse_action(&["pxs", "sync", "backup:7878/archive/out", &src_arg])?;
+        let action = parse_action(&["pxs", "sync", &src_arg, "backup:7878/archive/out"])?;
 
         match action {
             Action::Sync {

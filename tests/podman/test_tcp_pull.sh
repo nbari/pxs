@@ -55,7 +55,7 @@ $DOCKER run --name pxs-tcp-client \
     -v "$(pwd)/target/release/pxs:/usr/local/bin/pxs:ro" \
     -v "$DST_DIR:/data" \
     "$IMAGE" \
-    bash -lc "pxs sync /data/test.bin pxs-tcp-source:$PORT/test.bin -vv"
+    bash -lc "pxs sync pxs-tcp-source:$PORT/test.bin /data/test.bin -vv"
 
 if [ ! -f "$DEST_FILE" ]; then
     echo "Destination file was not created: $DEST_FILE"
