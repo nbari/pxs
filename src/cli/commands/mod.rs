@@ -172,7 +172,7 @@ fn threshold_arg(hidden: bool) -> Arg {
         .long_help(THRESHOLD_LONG_HELP)
         .value_name("THRESHOLD")
         .value_parser(threshold_parser())
-        .default_value("0.5")
+        .default_value("0.1")
         .hide(hidden)
 }
 
@@ -287,7 +287,7 @@ fn addr_arg() -> Arg {
         .required(true)
 }
 
-fn internal_stdio_args() -> [Arg; 13] {
+fn internal_stdio_args() -> [Arg; 12] {
     [
         Arg::new("stdio")
             .long("stdio")
@@ -321,11 +321,6 @@ fn internal_stdio_args() -> [Arg; 13] {
             .help("Receiver-issued transfer id for chunk-writer mode")
             .hide(true)
             .value_name("ID"),
-        Arg::new("chunk_path")
-            .long("chunk-path")
-            .help("Protocol path for the chunk-writer file")
-            .hide(true)
-            .value_name("PATH"),
         threshold_arg(true),
         checksum_arg(true),
         delete_arg(),

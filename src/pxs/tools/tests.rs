@@ -192,6 +192,38 @@ async fn test_local_directory_fsync_syncs_directories() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_local_delete_fsync_syncs_deleted_entry_parents() -> Result<()> {
+    let _guard = durability_test_lock().lock().await;
+    let dir = tempdir()?;
+    let src_dir = dir.path().join("src");
+    let dst_dir = dir.path().join("dst");
+    std::fs::create_dir_all(&src_dir)?;
+    std::fs::create_dir_all(dst_dir.join("stale/nested"))?;
+    std::fs::write(src_dir.join("keep.txt"), "keep")?;
+    std::fs::write(dst_dir.join("keep.txt"), "keep")?;
+    std::fs::write(dst_dir.join("stale/nested/file.txt"), "stale")?;
+
+    let probe = DurabilityProbe::start()?;
+    let options = SyncOptions::new(0.1, false, false, true, Vec::new(), true, true);
+    sync::sync_dir(&src_dir, &dst_dir, &options).await?;
+
+    let snapshot = probe.snapshot()?;
+    assert!(
+        snapshot
+            .synced_parent_targets
+            .contains(&dst_dir.join("stale/nested/file.txt"))
+            || snapshot
+                .synced_parent_targets
+                .contains(&dst_dir.join("stale/nested"))
+            || snapshot
+                .synced_parent_targets
+                .contains(&dst_dir.join("stale")),
+        "expected delete path to sync at least one removed entry parent"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_network_symlink_fsync_syncs_parent_directory() -> Result<()> {
     let _guard = durability_test_lock().lock().await;
     let dir = tempdir()?;

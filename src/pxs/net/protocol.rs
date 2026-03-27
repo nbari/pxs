@@ -75,11 +75,11 @@ pub enum Message {
     SessionOptions {
         fsync: bool,
         delete: bool,
-        path: Option<String>,
-        single_file_name: Option<String>,
+        path: Option<Vec<u8>>,
+        single_file_name: Option<Vec<u8>>,
     },
     PullRequest {
-        path: Option<String>,
+        path: Option<Vec<u8>>,
         threshold: f32,
         checksum: bool,
         delete: bool,
@@ -93,74 +93,74 @@ pub enum Message {
         total_size: u64,
     },
     SyncDir {
-        path: String,
+        path: Vec<u8>,
         metadata: FileMetadata,
     },
     SyncSymlink {
-        path: String,
-        target: String,
+        path: Vec<u8>,
+        target: Vec<u8>,
         metadata: FileMetadata,
     },
     SyncFile {
-        path: String,
+        path: Vec<u8>,
         metadata: FileMetadata,
         threshold: f32,
         checksum: bool,
     },
     RequestFullCopy {
-        path: String,
+        path: Vec<u8>,
     },
     RequestParallelFullCopy {
-        path: String,
+        path: Vec<u8>,
         transfer_id: String,
     },
     RequestHashes {
-        path: String,
+        path: Vec<u8>,
     },
     BlockHashes {
-        path: String,
+        path: Vec<u8>,
         hashes: Vec<u64>,
     },
     ApplyBlocks {
-        path: String,
+        path: Vec<u8>,
         blocks: Vec<Block>,
     },
     ApplyBlocksCompressed {
-        path: String,
+        path: Vec<u8>,
         compressed: Vec<u8>,
     },
     ApplyMetadata {
-        path: String,
+        path: Vec<u8>,
         metadata: FileMetadata,
     },
     MetadataApplied {
-        path: String,
+        path: Vec<u8>,
     },
     EndOfFile {
-        path: String,
+        path: Vec<u8>,
     },
     RequestBlocks {
-        path: String,
+        path: Vec<u8>,
         indices: Vec<u32>,
     },
     RequestParallelBlocks {
-        path: String,
+        path: Vec<u8>,
         transfer_id: String,
         indices: Vec<u32>,
     },
     ChunkWriterStart {
         transfer_id: String,
-        path: String,
+        path: Vec<u8>,
     },
     VerifyChecksum {
-        path: String,
+        path: Vec<u8>,
         hash: [u8; 32],
     },
     ChecksumVerified {
-        path: String,
+        path: Vec<u8>,
     },
     ChecksumMismatch {
-        path: String,
+        path: Vec<u8>,
     },
     SyncComplete,
     SyncCompleteAck,

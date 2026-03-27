@@ -13,7 +13,7 @@ mod staging;
 mod tests;
 
 pub use compare::{
-    get_file_size, is_below_threshold, should_skip_file, should_use_full_copy,
+    DEFAULT_THRESHOLD, get_file_size, is_below_threshold, should_skip_file, should_use_full_copy,
     should_use_full_copy_meta,
 };
 pub use fs::{preallocate, sync_directory_and_parent, sync_parent_directory, sync_path};

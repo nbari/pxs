@@ -1,4 +1,5 @@
 use crate::cli::actions::{Action, RemoteEndpoint, SyncOperand};
+use crate::pxs::tools::DEFAULT_THRESHOLD;
 use anyhow::Result;
 use clap::ArgMatches;
 use std::path::{Path, PathBuf};
@@ -66,7 +67,9 @@ fn required_string(matches: &ArgMatches, id: &str) -> Result<String> {
 }
 
 fn threshold(matches: &ArgMatches) -> f32 {
-    *matches.get_one::<f32>("threshold").unwrap_or(&0.5)
+    *matches
+        .get_one::<f32>("threshold")
+        .unwrap_or(&DEFAULT_THRESHOLD)
 }
 
 fn parse_remote_endpoint(endpoint: &str, allow_stdio: bool) -> Result<RemoteEndpoint> {
@@ -269,7 +272,6 @@ fn handle_internal_stdio(matches: &ArgMatches, quiet: bool) -> Result<Action> {
         return Ok(Action::InternalChunkWrite {
             dst: required_path(matches, "destination")?,
             transfer_id: required_string(matches, "transfer_id")?,
-            path: required_string(matches, "chunk_path")?,
             quiet,
         });
     }
@@ -408,6 +410,7 @@ mod tests {
         actions::{Action, RemoteEndpoint, SyncOperand},
         commands,
     };
+    use crate::pxs::tools::DEFAULT_THRESHOLD;
     use anyhow::Result;
     use tempfile::tempdir;
 
@@ -456,6 +459,24 @@ mod tests {
                 assert!(delete);
                 assert!(fsync);
             }
+            other => anyhow::bail!("expected Action::Sync, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sync_action_uses_default_threshold() -> Result<()> {
+        let dir = tempdir()?;
+        let src = dir.path().join("src.txt");
+        let dst = dir.path().join("dst.txt");
+        std::fs::write(&src, "content")?;
+        let src_arg = src.to_string_lossy().to_string();
+        let dst_arg = dst.to_string_lossy().to_string();
+
+        let action = parse_action(&["pxs", "sync", &dst_arg, &src_arg])?;
+        match action {
+            Action::Sync { threshold, .. } => assert_threshold(threshold, DEFAULT_THRESHOLD),
             other => anyhow::bail!("expected Action::Sync, got {other:?}"),
         }
 

@@ -281,6 +281,10 @@ fn make_patterned_bytes(len: usize, step: usize, offset: usize) -> Result<Vec<u8
     Ok(bytes)
 }
 
+fn protocol_path(path: &str) -> Vec<u8> {
+    path.as_bytes().to_vec()
+}
+
 #[test]
 fn test_protocol_serialization() -> Result<()> {
     let metadata = FileMetadata {
@@ -292,7 +296,7 @@ fn test_protocol_serialization() -> Result<()> {
         gid: 1000,
     };
     let msg = Message::SyncFile {
-        path: "/var/lib/postgresql/data/base/1/12345".to_string(),
+        path: protocol_path("/var/lib/postgresql/data/base/1/12345"),
         metadata,
         threshold: 0.5,
         checksum: true,
@@ -305,7 +309,7 @@ fn test_protocol_serialization() -> Result<()> {
         path, metadata: m, ..
     } = decoded
     {
-        assert_eq!(path, "/var/lib/postgresql/data/base/1/12345");
+        assert_eq!(path, protocol_path("/var/lib/postgresql/data/base/1/12345"));
         assert_eq!(m.size, 1024 * 1024 * 1024);
     } else {
         anyhow::bail!("Decoded message type mismatch");
@@ -316,7 +320,7 @@ fn test_protocol_serialization() -> Result<()> {
 #[test]
 fn test_codec_uses_pxs_magic() -> Result<()> {
     let msg = Message::EndOfFile {
-        path: String::from("test.bin"),
+        path: protocol_path("test.bin"),
     };
     let encoded = net::serialize_message(&msg)?;
 
@@ -332,7 +336,7 @@ fn test_codec_uses_pxs_magic() -> Result<()> {
     let decoded = net::deserialize_message(&decoded)?;
 
     match decoded {
-        Message::EndOfFile { path } => assert_eq!(path, "test.bin"),
+        Message::EndOfFile { path } => assert_eq!(path, protocol_path("test.bin")),
         other => anyhow::bail!("expected EndOfFile, got {other:?}"),
     }
 
@@ -359,7 +363,7 @@ fn test_codec_rejects_oversized_frame() -> Result<()> {
 #[test]
 fn test_codec_returns_none_for_incomplete_payload() -> Result<()> {
     let msg = Message::EndOfFile {
-        path: String::from("test.bin"),
+        path: protocol_path("test.bin"),
     };
     let encoded = net::serialize_message(&msg)?;
 
@@ -376,7 +380,7 @@ fn test_codec_returns_none_for_incomplete_payload() -> Result<()> {
 #[test]
 fn test_codec_resynchronizes_after_garbage_prefix() -> Result<()> {
     let msg = Message::EndOfFile {
-        path: String::from("test.bin"),
+        path: protocol_path("test.bin"),
     };
     let encoded = net::serialize_message(&msg)?;
 
@@ -390,7 +394,7 @@ fn test_codec_resynchronizes_after_garbage_prefix() -> Result<()> {
     let decoded = net::deserialize_message(&decoded)?;
 
     match decoded {
-        Message::EndOfFile { path } => assert_eq!(path, "test.bin"),
+        Message::EndOfFile { path } => assert_eq!(path, protocol_path("test.bin")),
         other => anyhow::bail!("expected EndOfFile, got {other:?}"),
     }
 
@@ -506,6 +510,29 @@ async fn test_stdio_transport_end_to_end_sync() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_stdio_transport_preserves_non_utf8_names_and_symlink_targets() -> Result<()> {
+    let dir = tempdir()?;
+    let src_dir = dir.path().join("src");
+    let dst_dir = dir.path().join("dst");
+    std::fs::create_dir_all(&src_dir)?;
+    std::fs::create_dir_all(&dst_dir)?;
+
+    let file_name = OsString::from_vec(b"file-\xff.bin".to_vec());
+    let file_path = src_dir.join(&file_name);
+    std::fs::write(&file_path, b"payload")?;
+
+    let link_name = OsString::from_vec(b"link-\xfe".to_vec());
+    let link_target = PathBuf::from(OsString::from_vec(b"target-\xfd".to_vec()));
+    std::os::unix::fs::symlink(&link_target, src_dir.join(&link_name))?;
+
+    run_stdio_sync(&src_dir, &dst_dir, &[]).await?;
+
+    assert_eq!(std::fs::read(dst_dir.join(&file_name))?, b"payload");
+    assert_eq!(std::fs::read_link(dst_dir.join(&link_name))?, link_target);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_stdio_transport_delete_removes_extraneous_entries() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
@@ -596,7 +623,7 @@ async fn test_stdio_receiver_requests_parallel_full_copy_and_cleans_transfer_rec
         .await?;
     framed
         .send(net::serialize_message(&Message::SyncFile {
-            path: String::from("large.bin"),
+            path: protocol_path("large.bin"),
             metadata: FileMetadata {
                 size: 512 * 1024,
                 mtime: 1_000_000_000,
@@ -616,7 +643,7 @@ async fn test_stdio_receiver_requests_parallel_full_copy_and_cleans_transfer_rec
         .ok_or_else(|| anyhow::anyhow!("missing parallel full-copy request"))??;
     let transfer_id = match net::deserialize_message(&request)? {
         Message::RequestParallelFullCopy { path, transfer_id } => {
-            assert_eq!(path, "large.bin");
+            assert_eq!(path, protocol_path("large.bin"));
             transfer_id
         }
         other => anyhow::bail!("expected RequestParallelFullCopy, got {other:?}"),
@@ -671,7 +698,7 @@ async fn test_stdio_receiver_requests_parallel_blocks_with_transfer_id() -> Resu
         .await?;
     framed
         .send(net::serialize_message(&Message::SyncFile {
-            path: String::from("delta.bin"),
+            path: protocol_path("delta.bin"),
             metadata: FileMetadata {
                 size: 11,
                 mtime: 1_000_000_000,
@@ -690,13 +717,13 @@ async fn test_stdio_receiver_requests_parallel_blocks_with_transfer_id() -> Resu
         .await
         .ok_or_else(|| anyhow::anyhow!("missing hash request"))??;
     match net::deserialize_message(&request_hashes)? {
-        Message::RequestHashes { path } => assert_eq!(path, "delta.bin"),
+        Message::RequestHashes { path } => assert_eq!(path, protocol_path("delta.bin")),
         other => anyhow::bail!("expected RequestHashes, got {other:?}"),
     }
 
     framed
         .send(net::serialize_message(&Message::BlockHashes {
-            path: String::from("delta.bin"),
+            path: protocol_path("delta.bin"),
             hashes,
         })?)
         .await?;
@@ -711,7 +738,7 @@ async fn test_stdio_receiver_requests_parallel_blocks_with_transfer_id() -> Resu
             transfer_id,
             indices,
         } => {
-            assert_eq!(path, "delta.bin");
+            assert_eq!(path, protocol_path("delta.bin"));
             assert!(!indices.is_empty());
             transfer_id
         }
@@ -738,13 +765,7 @@ async fn test_chunk_writer_rejects_unknown_transfer_id() -> Result<()> {
     let receiver = spawn_stdio_receiver(
         bin,
         &dst_root,
-        &[
-            "--chunk-writer",
-            "--transfer-id",
-            "deadbeef",
-            "--chunk-path",
-            "file.bin",
-        ],
+        &["--chunk-writer", "--transfer-id", "deadbeef"],
     )?;
 
     let (status, stderr) = wait_for_child(receiver).await?;
@@ -754,7 +775,7 @@ async fn test_chunk_writer_rejects_unknown_transfer_id() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_chunk_writer_rejects_transfer_path_mismatch() -> Result<()> {
+async fn test_chunk_writer_uses_recorded_path_before_protocol_session() -> Result<()> {
     let dir = tempdir()?;
     let dst_root = dir.path().join("dst");
     std::fs::create_dir_all(&dst_root)?;
@@ -766,18 +787,12 @@ async fn test_chunk_writer_rejects_transfer_path_mismatch() -> Result<()> {
     let receiver = spawn_stdio_receiver(
         bin,
         &dst_root,
-        &[
-            "--chunk-writer",
-            "--transfer-id",
-            "feedface",
-            "--chunk-path",
-            "other.bin",
-        ],
+        &["--chunk-writer", "--transfer-id", "feedface"],
     )?;
 
     let (status, stderr) = wait_for_child(receiver).await?;
     assert!(!status.success());
-    assert!(stderr.contains("protocol path mismatch"));
+    assert!(stderr.contains("chunk writer connection closed unexpectedly"));
     Ok(())
 }
 
@@ -796,13 +811,7 @@ async fn test_chunk_writer_supports_non_utf8_staged_path() -> Result<()> {
     let mut receiver = spawn_stdio_receiver(
         bin,
         &dst_root,
-        &[
-            "--chunk-writer",
-            "--transfer-id",
-            "cafebabe",
-            "--chunk-path",
-            "file.bin",
-        ],
+        &["--chunk-writer", "--transfer-id", "cafebabe"],
     )?;
     let mut framed = child_framed(&mut receiver)?;
 
@@ -826,7 +835,7 @@ async fn test_chunk_writer_supports_non_utf8_staged_path() -> Result<()> {
 
     framed
         .send(net::serialize_message(&Message::ApplyBlocks {
-            path: String::from("file.bin"),
+            path: protocol_path("file.bin"),
             blocks: vec![Block {
                 offset: 0,
                 data: b"hello".to_vec(),
@@ -881,7 +890,7 @@ async fn test_raw_tcp_chunk_writer_rejects_unknown_transfer_id() -> Result<()> {
     sender
         .send(net::serialize_message(&Message::ChunkWriterStart {
             transfer_id: String::from("deadbeef"),
-            path: String::from("file.bin"),
+            path: protocol_path("file.bin"),
         })?)
         .await?;
 
@@ -999,6 +1008,67 @@ async fn test_raw_tcp_pull_honors_exact_local_file_path() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_raw_tcp_push_preserves_non_utf8_names_and_symlink_targets() -> Result<()> {
+    let dir = tempdir()?;
+    let src_root = dir.path().join("src");
+    let dst_root = dir.path().join("dst");
+    std::fs::create_dir_all(&src_root)?;
+    std::fs::create_dir_all(&dst_root)?;
+
+    let file_name = OsString::from_vec(b"raw-\xff.bin".to_vec());
+    std::fs::write(src_root.join(&file_name), b"tcp-payload")?;
+
+    let link_name = OsString::from_vec(b"link-\xfe".to_vec());
+    let link_target = PathBuf::from(OsString::from_vec(b"target-\xfd".to_vec()));
+    std::os::unix::fs::symlink(&link_target, src_root.join(&link_name))?;
+
+    let (addr, receiver_handle) = spawn_receiver(dst_root.clone()).await?;
+    net::run_sender(&addr.to_string(), &src_root, 0.1, false, false, &[]).await?;
+    stop_receiver(receiver_handle).await;
+
+    assert_eq!(std::fs::read(dst_root.join(&file_name))?, b"tcp-payload");
+    assert_eq!(std::fs::read_link(dst_root.join(&link_name))?, link_target);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_raw_tcp_pull_preserves_non_utf8_names_and_symlink_targets() -> Result<()> {
+    let dir = tempdir()?;
+    let src_root = dir.path().join("src");
+    let dst_root = dir.path().join("dst");
+    std::fs::create_dir_all(&src_root)?;
+    std::fs::create_dir_all(&dst_root)?;
+
+    let file_name = OsString::from_vec(b"pull-\xff.bin".to_vec());
+    std::fs::write(src_root.join(&file_name), b"tcp-pull")?;
+
+    let link_name = OsString::from_vec(b"pull-link-\xfe".to_vec());
+    let link_target = PathBuf::from(OsString::from_vec(b"pull-target-\xfd".to_vec()));
+    std::os::unix::fs::symlink(&link_target, src_root.join(&link_name))?;
+
+    let probe = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = probe.local_addr()?;
+    drop(probe);
+
+    let addr_string = addr.to_string();
+    let src_root_clone = src_root.clone();
+    let listener_task = tokio::spawn(async move {
+        let ignores = Vec::new();
+        let _ = net::run_sender_listener(&addr_string, &src_root_clone, 0.1, false, &ignores).await;
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    net::run_pull_client(&addr.to_string(), &dst_root, false).await?;
+
+    listener_task.abort();
+    let _ = listener_task.await;
+
+    assert_eq!(std::fs::read(dst_root.join(&file_name))?, b"tcp-pull");
+    assert_eq!(std::fs::read_link(dst_root.join(&link_name))?, link_target);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_raw_tcp_push_delete_removes_extraneous_entries() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
@@ -1035,6 +1105,42 @@ async fn test_raw_tcp_push_delete_removes_extraneous_entries() -> Result<()> {
         "nested-fresh"
     );
     assert!(!dst_dir.join("stale").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_raw_tcp_push_delete_removes_non_utf8_extraneous_entries() -> Result<()> {
+    let dir = tempdir()?;
+    let src_dir = dir.path().join("src");
+    let dst_dir = dir.path().join("dst");
+    std::fs::create_dir_all(&src_dir)?;
+    std::fs::create_dir_all(&dst_dir)?;
+    std::fs::write(src_dir.join("keep.txt"), "fresh")?;
+
+    let stale_name = OsString::from_vec(b"stale-\xff.txt".to_vec());
+    std::fs::write(dst_dir.join(&stale_name), "obsolete")?;
+
+    let (addr, receiver_handle) = spawn_listener_receiver(dst_dir.clone()).await?;
+    net::run_sender_with_features(
+        &addr.to_string(),
+        &src_dir,
+        net::RemoteSyncOptions {
+            path: None,
+            threshold: 0.1,
+            features: net::RemoteFeatureOptions {
+                checksum: false,
+                delete: true,
+                fsync: false,
+            },
+            large_file_parallel: None,
+            ignores: &[],
+        },
+    )
+    .await?;
+    stop_receiver(receiver_handle).await;
+
+    assert_eq!(std::fs::read_to_string(dst_dir.join("keep.txt"))?, "fresh");
+    assert!(!dst_dir.join(&stale_name).exists());
     Ok(())
 }
 
@@ -1158,7 +1264,7 @@ fn test_block_serialization() -> Result<()> {
     };
 
     let msg = Message::ApplyBlocks {
-        path: "test.bin".to_string(),
+        path: protocol_path("test.bin"),
         blocks: vec![block],
     };
 
@@ -1485,13 +1591,13 @@ async fn test_sync_remote_file_normalizes_nested_relative_paths() -> Result<()> 
         .ok_or_else(|| anyhow::anyhow!("missing sync message"))??;
     let sync_msg = net::deserialize_message(&sync_msg)?;
     match sync_msg {
-        Message::SyncFile { path, .. } => assert_eq!(path, expected_path),
+        Message::SyncFile { path, .. } => assert_eq!(path, protocol_path(&expected_path)),
         other => anyhow::bail!("expected SyncFile, got {other:?}"),
     }
 
     receiver_framed
         .send(net::serialize_message(&Message::EndOfFile {
-            path: expected_path_for_task.clone(),
+            path: protocol_path(&expected_path_for_task),
         })?)
         .await?;
 
@@ -1501,13 +1607,15 @@ async fn test_sync_remote_file_normalizes_nested_relative_paths() -> Result<()> 
         .ok_or_else(|| anyhow::anyhow!("missing ApplyMetadata message"))??;
     let metadata_msg = net::deserialize_message(&metadata_msg)?;
     match metadata_msg {
-        Message::ApplyMetadata { path, .. } => assert_eq!(path, expected_path_for_task),
+        Message::ApplyMetadata { path, .. } => {
+            assert_eq!(path, protocol_path(&expected_path_for_task));
+        }
         other => anyhow::bail!("expected ApplyMetadata, got {other:?}"),
     }
 
     receiver_framed
         .send(net::serialize_message(&Message::MetadataApplied {
-            path: String::from("dir/nested/file.txt"),
+            path: protocol_path("dir/nested/file.txt"),
         })?)
         .await?;
 
@@ -1554,7 +1662,7 @@ async fn test_sync_remote_file_rejects_mismatched_response_path() -> Result<()> 
 
     receiver_framed
         .send(net::serialize_message(&Message::RequestFullCopy {
-            path: String::from("other.txt"),
+            path: protocol_path("other.txt"),
         })?)
         .await?;
 
@@ -1597,7 +1705,7 @@ async fn test_handle_client_rejects_unsafe_protocol_paths() -> Result<()> {
         let _ = sender.next().await;
         sender
             .send(net::serialize_message(&Message::SyncDir {
-                path: path.to_string(),
+                path: protocol_path(path),
                 metadata,
             })?)
             .await?;
@@ -1667,7 +1775,7 @@ async fn test_handle_client_rejects_receiver_side_request_message() -> Result<()
     let _ = sender.next().await;
     sender
         .send(net::serialize_message(&Message::RequestFullCopy {
-            path: String::from("file.bin"),
+            path: protocol_path("file.bin"),
         })?)
         .await?;
     drop(sender);
@@ -1704,7 +1812,7 @@ async fn test_handle_client_rejects_orphan_verify_checksum() -> Result<()> {
     let _ = sender.next().await;
     sender
         .send(net::serialize_message(&Message::VerifyChecksum {
-            path: String::from("missing.bin"),
+            path: protocol_path("missing.bin"),
             hash: *blake3::hash(b"payload").as_bytes(),
         })?)
         .await?;
@@ -1935,7 +2043,7 @@ async fn test_partial_file_cleanup_on_error() -> Result<()> {
     };
     sender
         .send(net::serialize_message(&Message::SyncFile {
-            path: String::from("partial.bin"),
+            path: protocol_path("partial.bin"),
             metadata,
             threshold: 0.5,
             checksum: false,
@@ -1948,7 +2056,7 @@ async fn test_partial_file_cleanup_on_error() -> Result<()> {
     // Send partial blocks (not all data)
     sender
         .send(net::serialize_message(&Message::ApplyBlocks {
-            path: String::from("partial.bin"),
+            path: protocol_path("partial.bin"),
             blocks: vec![Block {
                 offset: 0,
                 data: vec![1, 2, 3, 4],
@@ -2006,7 +2114,7 @@ async fn test_partial_update_failure_preserves_existing_file() -> Result<()> {
     };
     sender
         .send(net::serialize_message(&Message::SyncFile {
-            path: String::from("partial.bin"),
+            path: protocol_path("partial.bin"),
             metadata,
             threshold: 0.5,
             checksum: false,
@@ -2018,13 +2126,13 @@ async fn test_partial_update_failure_preserves_existing_file() -> Result<()> {
         .await
         .ok_or_else(|| anyhow::anyhow!("missing full copy request"))??;
     match net::deserialize_message(&request)? {
-        Message::RequestFullCopy { path } => assert_eq!(path, "partial.bin"),
+        Message::RequestFullCopy { path } => assert_eq!(path, protocol_path("partial.bin")),
         other => anyhow::bail!("expected RequestFullCopy, got {other:?}"),
     }
 
     sender
         .send(net::serialize_message(&Message::ApplyBlocks {
-            path: String::from("partial.bin"),
+            path: protocol_path("partial.bin"),
             blocks: vec![Block {
                 offset: 0,
                 data: vec![9, 8, 7, 6],
@@ -2074,7 +2182,7 @@ async fn test_checksum_mismatch_preserves_existing_file() -> Result<()> {
     };
     sender
         .send(net::serialize_message(&Message::SyncFile {
-            path: String::from("checksum.bin"),
+            path: protocol_path("checksum.bin"),
             metadata,
             threshold: 0.5,
             checksum: true,
@@ -2086,13 +2194,13 @@ async fn test_checksum_mismatch_preserves_existing_file() -> Result<()> {
         .await
         .ok_or_else(|| anyhow::anyhow!("missing full copy request"))??;
     match net::deserialize_message(&request)? {
-        Message::RequestFullCopy { path } => assert_eq!(path, "checksum.bin"),
+        Message::RequestFullCopy { path } => assert_eq!(path, protocol_path("checksum.bin")),
         other => anyhow::bail!("expected RequestFullCopy, got {other:?}"),
     }
 
     sender
         .send(net::serialize_message(&Message::ApplyBlocks {
-            path: String::from("checksum.bin"),
+            path: protocol_path("checksum.bin"),
             blocks: vec![Block {
                 offset: 0,
                 data: corrupt_bytes.to_vec(),
@@ -2101,7 +2209,7 @@ async fn test_checksum_mismatch_preserves_existing_file() -> Result<()> {
         .await?;
     sender
         .send(net::serialize_message(&Message::ApplyMetadata {
-            path: String::from("checksum.bin"),
+            path: protocol_path("checksum.bin"),
             metadata,
         })?)
         .await?;
@@ -2111,13 +2219,13 @@ async fn test_checksum_mismatch_preserves_existing_file() -> Result<()> {
         .await
         .ok_or_else(|| anyhow::anyhow!("missing MetadataApplied"))??;
     match net::deserialize_message(&metadata_applied)? {
-        Message::MetadataApplied { path } => assert_eq!(path, "checksum.bin"),
+        Message::MetadataApplied { path } => assert_eq!(path, protocol_path("checksum.bin")),
         other => anyhow::bail!("expected MetadataApplied, got {other:?}"),
     }
 
     sender
         .send(net::serialize_message(&Message::VerifyChecksum {
-            path: String::from("checksum.bin"),
+            path: protocol_path("checksum.bin"),
             hash: *blake3::hash(&source_bytes).as_bytes(),
         })?)
         .await?;
@@ -2127,7 +2235,7 @@ async fn test_checksum_mismatch_preserves_existing_file() -> Result<()> {
         .await
         .ok_or_else(|| anyhow::anyhow!("missing checksum response"))??;
     match net::deserialize_message(&verify_response)? {
-        Message::ChecksumMismatch { path } => assert_eq!(path, "checksum.bin"),
+        Message::ChecksumMismatch { path } => assert_eq!(path, protocol_path("checksum.bin")),
         other => anyhow::bail!("expected ChecksumMismatch, got {other:?}"),
     }
 
@@ -2179,7 +2287,7 @@ async fn test_apply_metadata_does_not_follow_symlinks() -> Result<()> {
 
     sender
         .send(net::serialize_message(&Message::ApplyMetadata {
-            path: String::from("attacker_link"),
+            path: protocol_path("attacker_link"),
             metadata,
         })?)
         .await?;
@@ -2232,7 +2340,7 @@ async fn test_sync_file_rejects_parent_symlink_traversal() -> Result<()> {
 
     sender
         .send(net::serialize_message(&Message::SyncFile {
-            path: String::from("escape/escaped.txt"),
+            path: protocol_path("escape/escaped.txt"),
             metadata: FileMetadata {
                 size: 7,
                 mtime: 1_000_000_000,
@@ -2287,7 +2395,7 @@ async fn test_sync_file_rejects_symlinked_destination_root() -> Result<()> {
 
     sender
         .send(net::serialize_message(&Message::SyncFile {
-            path: String::from("escaped-root.txt"),
+            path: protocol_path("escaped-root.txt"),
             metadata: FileMetadata {
                 size: 7,
                 mtime: 1_000_000_000,
@@ -2356,7 +2464,7 @@ async fn test_sync_replaces_broken_symlink_at_destination() -> Result<()> {
 
     sender
         .send(net::serialize_message(&Message::SyncFile {
-            path: String::from("entry"),
+            path: protocol_path("entry"),
             metadata,
             threshold: 0.5,
             checksum: false,
@@ -2369,13 +2477,13 @@ async fn test_sync_replaces_broken_symlink_at_destination() -> Result<()> {
         .await
         .ok_or_else(|| anyhow::anyhow!("missing full copy request"))??;
     match net::deserialize_message(&req)? {
-        Message::RequestFullCopy { path } => assert_eq!(path, "entry"),
+        Message::RequestFullCopy { path } => assert_eq!(path, protocol_path("entry")),
         other => anyhow::bail!("expected RequestFullCopy, got {other:?}"),
     }
 
     sender
         .send(net::serialize_message(&Message::ApplyBlocks {
-            path: String::from("entry"),
+            path: protocol_path("entry"),
             blocks: vec![net::Block {
                 offset: 0,
                 data: content.to_vec(),
@@ -2385,7 +2493,7 @@ async fn test_sync_replaces_broken_symlink_at_destination() -> Result<()> {
 
     sender
         .send(net::serialize_message(&Message::ApplyMetadata {
-            path: String::from("entry"),
+            path: protocol_path("entry"),
             metadata,
         })?)
         .await?;
@@ -2438,8 +2546,8 @@ async fn test_sync_replaces_broken_symlink_with_new_symlink() -> Result<()> {
 
     sender
         .send(net::serialize_message(&Message::SyncSymlink {
-            path: String::from("entry_link"),
-            target: new_target.clone(),
+            path: protocol_path("entry_link"),
+            target: protocol_path(&new_target),
             metadata,
         })?)
         .await?;
@@ -2494,7 +2602,7 @@ async fn test_receiver_reports_permission_denied_error_to_sender() -> Result<()>
 
     sender
         .send(net::serialize_message(&Message::SyncFile {
-            path: String::from("blocked.bin"),
+            path: protocol_path("blocked.bin"),
             metadata,
             threshold: 0.5,
             checksum: false,
@@ -2579,7 +2687,7 @@ async fn test_run_sender_forwards_fsync_session_option_for_tcp_push() -> Result<
             .await
             .ok_or_else(|| anyhow::anyhow!("missing directory task"))??;
         match net::deserialize_message(&sync_dir)? {
-            Message::SyncDir { path, .. } => assert_eq!(path, "nested"),
+            Message::SyncDir { path, .. } => assert_eq!(path, protocol_path("nested")),
             other => anyhow::bail!("expected SyncDir, got {other:?}"),
         }
 
@@ -2660,7 +2768,7 @@ async fn test_handle_client_rejects_premature_sync_complete() -> Result<()> {
 
     sender
         .send(net::serialize_message(&Message::SyncFile {
-            path: String::from("incomplete.bin"),
+            path: protocol_path("incomplete.bin"),
             metadata: FileMetadata {
                 size: 4,
                 mtime: 1_000_000_000,
@@ -2679,7 +2787,7 @@ async fn test_handle_client_rejects_premature_sync_complete() -> Result<()> {
         .await
         .ok_or_else(|| anyhow::anyhow!("missing full-copy request"))??;
     match net::deserialize_message(&request)? {
-        Message::RequestFullCopy { path } => assert_eq!(path, "incomplete.bin"),
+        Message::RequestFullCopy { path } => assert_eq!(path, protocol_path("incomplete.bin")),
         other => anyhow::bail!("expected RequestFullCopy, got {other:?}"),
     }
 
@@ -2743,7 +2851,7 @@ async fn test_handle_client_recovers_if_destination_disappears_after_request_has
 
     sender
         .send(net::serialize_message(&Message::SyncFile {
-            path: String::from("race.bin"),
+            path: protocol_path("race.bin"),
             metadata,
             threshold: 0.5,
             checksum: true,
@@ -2755,7 +2863,7 @@ async fn test_handle_client_recovers_if_destination_disappears_after_request_has
         .await
         .ok_or_else(|| anyhow::anyhow!("missing hash request"))??;
     match net::deserialize_message(&request_hashes)? {
-        Message::RequestHashes { path } => assert_eq!(path, "race.bin"),
+        Message::RequestHashes { path } => assert_eq!(path, protocol_path("race.bin")),
         other => anyhow::bail!("expected RequestHashes, got {other:?}"),
     }
 
@@ -2763,7 +2871,7 @@ async fn test_handle_client_recovers_if_destination_disappears_after_request_has
 
     sender
         .send(net::serialize_message(&Message::BlockHashes {
-            path: String::from("race.bin"),
+            path: protocol_path("race.bin"),
             hashes,
         })?)
         .await?;
@@ -2773,7 +2881,7 @@ async fn test_handle_client_recovers_if_destination_disappears_after_request_has
         .await
         .ok_or_else(|| anyhow::anyhow!("missing follow-up request"))??;
     match net::deserialize_message(&follow_up)? {
-        Message::RequestFullCopy { path } => assert_eq!(path, "race.bin"),
+        Message::RequestFullCopy { path } => assert_eq!(path, protocol_path("race.bin")),
         other => anyhow::bail!("expected RequestFullCopy fallback, got {other:?}"),
     }
 

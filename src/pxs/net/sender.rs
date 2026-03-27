@@ -1,7 +1,10 @@
 use super::{
     BLOCK_SIZE, BLOCK_SIZE_USIZE, LargeFileParallelOptions, RemoteSyncOptions,
     codec::PxsCodec,
-    path::{ensure_expected_protocol_path, relative_protocol_path, resolve_requested_root},
+    path::{
+        display_protocol_path, ensure_expected_protocol_path, relative_protocol_path,
+        resolve_requested_root,
+    },
     protocol::{
         Block, FileMetadata, Message, deserialize_message, serialize_block_batch, serialize_message,
     },
@@ -18,7 +21,7 @@ use crate::pxs::tools;
 use anyhow::Result;
 use futures_util::SinkExt;
 use indicatif::ProgressBar;
-use std::{os::unix::fs::FileExt, path::Path, sync::Arc};
+use std::{os::unix::ffi::OsStrExt, os::unix::fs::FileExt, path::Path, sync::Arc};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
@@ -32,7 +35,7 @@ const MIN_COMPRESSED_BATCH_BYTES: u64 = 64 * 1024;
 struct SessionOptionFlags {
     fsync: bool,
     delete: bool,
-    path: Option<String>,
+    path: Option<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -65,7 +68,7 @@ struct ServeRequestDefaults {
 }
 
 struct PullRequestOptions {
-    path: Option<String>,
+    path: Option<Vec<u8>>,
     threshold: f32,
     checksum: bool,
     delete: bool,
@@ -290,7 +293,7 @@ pub async fn run_sender_with_features(
             session: SessionOptionFlags {
                 fsync: options.features.fsync,
                 delete: options.features.delete,
-                path: options.path.map(str::to_string),
+                path: options.path.map(|path| path.as_bytes().to_vec()),
             },
             allow_lz4: true,
             large_file_parallel,
@@ -432,8 +435,8 @@ async fn send_push_session_options<T>(
     framed: &mut Framed<T, PxsCodec>,
     fsync: bool,
     delete: bool,
-    path: Option<&str>,
-    single_file_name: Option<String>,
+    path: Option<&[u8]>,
+    single_file_name: Option<Vec<u8>>,
 ) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
@@ -446,21 +449,21 @@ where
         .send(serialize_message(&Message::SessionOptions {
             fsync,
             delete,
-            path: path.map(str::to_string),
+            path: path.map(ToOwned::to_owned),
             single_file_name,
         })?)
         .await?;
     Ok(())
 }
 
-fn session_single_file_name(src_root: &Path) -> Result<Option<String>> {
+fn session_single_file_name(src_root: &Path) -> Result<Option<Vec<u8>>> {
     if !src_root.is_file() {
         return Ok(None);
     }
 
     src_root
         .file_name()
-        .map(|name| Some(name.to_string_lossy().into_owned()))
+        .map(|name| Some(name.as_bytes().to_vec()))
         .ok_or_else(|| anyhow::anyhow!("source file has no name: {}", src_root.display()))
 }
 
@@ -577,7 +580,7 @@ where
                     .await?;
             }
             SyncTask::File { path } => {
-                let src_path = source_path_for(src_root, path);
+                let src_path = source_path_for(src_root, path)?;
                 sync_remote_file_with_features(
                     framed,
                     src_root,
@@ -600,7 +603,7 @@ where
 
 async fn send_sync_file_message<T>(
     framed: &mut Framed<T, PxsCodec>,
-    rel_path: &str,
+    rel_path: &[u8],
     metadata: FileMetadata,
     threshold: f32,
     checksum: bool,
@@ -610,7 +613,7 @@ where
 {
     framed
         .send(serialize_message(&Message::SyncFile {
-            path: rel_path.to_string(),
+            path: rel_path.to_vec(),
             metadata,
             threshold,
             checksum,
@@ -730,7 +733,7 @@ async fn read_requested_blocks(
 
 async fn send_block_batch<T>(
     framed: &mut Framed<T, PxsCodec>,
-    rel_path: &str,
+    rel_path: &[u8],
     blocks: Vec<Block>,
     progress: &Arc<ProgressBar>,
     features: TransportFeatures,
@@ -745,7 +748,7 @@ where
         if compressed.len() < serialized.len() {
             framed
                 .send(serialize_message(&Message::ApplyBlocksCompressed {
-                    path: rel_path.to_string(),
+                    path: rel_path.to_vec(),
                     compressed,
                 })?)
                 .await?;
@@ -756,7 +759,7 @@ where
 
     framed
         .send(serialize_message(&Message::ApplyBlocks {
-            path: rel_path.to_string(),
+            path: rel_path.to_vec(),
             blocks,
         })?)
         .await?;
@@ -766,7 +769,7 @@ where
 
 async fn send_apply_metadata<T>(
     framed: &mut Framed<T, PxsCodec>,
-    rel_path: &str,
+    rel_path: &[u8],
     metadata: FileMetadata,
 ) -> Result<()>
 where
@@ -774,7 +777,7 @@ where
 {
     framed
         .send(serialize_message(&Message::ApplyMetadata {
-            path: rel_path.to_string(),
+            path: rel_path.to_vec(),
             metadata,
         })?)
         .await?;
@@ -842,7 +845,7 @@ where
 
 async fn send_full_copy_range<T>(
     framed: &mut Framed<T, PxsCodec>,
-    rel_path: &str,
+    rel_path: &[u8],
     source_reader: Arc<SourceReadContext>,
     start_block: u64,
     end_block: u64,
@@ -891,7 +894,7 @@ where
 
 async fn send_requested_block_batches<T>(
     framed: &mut Framed<T, PxsCodec>,
-    rel_path: &str,
+    rel_path: &[u8],
     source_reader: Arc<SourceReadContext>,
     indices: Vec<u32>,
     progress: &Arc<ProgressBar>,
@@ -911,7 +914,7 @@ where
 async fn open_tcp_chunk_writer_connection(
     addr: &str,
     transfer_id: &str,
-    rel_path: &str,
+    rel_path: &[u8],
 ) -> Result<Framed<TcpStream, PxsCodec>> {
     let stream = connect_with_retry(addr).await?;
     let mut framed = Framed::new(stream, PxsCodec);
@@ -919,7 +922,7 @@ async fn open_tcp_chunk_writer_connection(
     framed
         .send(serialize_message(&Message::ChunkWriterStart {
             transfer_id: transfer_id.to_string(),
-            path: rel_path.to_string(),
+            path: rel_path.to_vec(),
         })?)
         .await?;
     Ok(framed)
@@ -927,7 +930,7 @@ async fn open_tcp_chunk_writer_connection(
 
 async fn run_tcp_parallel_full_copy_workers(
     addr: &str,
-    rel_path: &str,
+    rel_path: &[u8],
     transfer_id: &str,
     metadata: FileMetadata,
     progress: &Arc<ProgressBar>,
@@ -941,7 +944,7 @@ async fn run_tcp_parallel_full_copy_workers(
     for (start_block, end_block) in ranges {
         let addr = addr.to_string();
         let transfer_id = transfer_id.to_string();
-        let rel_path = rel_path.to_string();
+        let rel_path = rel_path.to_vec();
         let progress = Arc::clone(progress);
         let source_reader = Arc::clone(&source_reader);
 
@@ -970,7 +973,7 @@ async fn run_tcp_parallel_full_copy_workers(
 
 async fn run_tcp_parallel_block_workers(
     addr: &str,
-    rel_path: &str,
+    rel_path: &[u8],
     transfer_id: &str,
     indices: Vec<u32>,
     progress: &Arc<ProgressBar>,
@@ -983,7 +986,7 @@ async fn run_tcp_parallel_block_workers(
     for batch in batches {
         let addr = addr.to_string();
         let transfer_id = transfer_id.to_string();
-        let rel_path = rel_path.to_string();
+        let rel_path = rel_path.to_vec();
         let progress = Arc::clone(progress);
         let source_reader = Arc::clone(&source_reader);
 
@@ -1011,7 +1014,7 @@ async fn run_tcp_parallel_block_workers(
 
 async fn run_ssh_parallel_full_copy_workers(
     options: &ParallelSenderOptions,
-    rel_path: &str,
+    rel_path: &[u8],
     transfer_id: &str,
     metadata: FileMetadata,
     progress: &Arc<ProgressBar>,
@@ -1028,12 +1031,12 @@ async fn run_ssh_parallel_full_copy_workers(
         let addr = addr.clone();
         let dst_path = dst_path.clone();
         let transfer_id = transfer_id.to_string();
-        let rel_path = rel_path.to_string();
+        let rel_path = rel_path.to_vec();
         let progress = Arc::clone(progress);
         let source_reader = Arc::clone(&source_reader);
 
         workers.push(tokio::spawn(async move {
-            let remote_cmd = build_ssh_chunk_writer_command(&dst_path, &transfer_id, &rel_path);
+            let remote_cmd = build_ssh_chunk_writer_command(&dst_path, &transfer_id);
             let mut session = ChildSession::spawn(build_ssh_command(&addr, &remote_cmd))?;
             let result = async {
                 let features = sender_handshake(session.framed_mut()?, false, false).await?;
@@ -1062,7 +1065,7 @@ async fn run_ssh_parallel_full_copy_workers(
 
 async fn run_ssh_parallel_block_workers(
     options: &ParallelSenderOptions,
-    rel_path: &str,
+    rel_path: &[u8],
     transfer_id: &str,
     indices: Vec<u32>,
     progress: &Arc<ProgressBar>,
@@ -1078,12 +1081,12 @@ async fn run_ssh_parallel_block_workers(
         let addr = addr.clone();
         let dst_path = dst_path.clone();
         let transfer_id = transfer_id.to_string();
-        let rel_path = rel_path.to_string();
+        let rel_path = rel_path.to_vec();
         let progress = Arc::clone(progress);
         let source_reader = Arc::clone(&source_reader);
 
         workers.push(tokio::spawn(async move {
-            let remote_cmd = build_ssh_chunk_writer_command(&dst_path, &transfer_id, &rel_path);
+            let remote_cmd = build_ssh_chunk_writer_command(&dst_path, &transfer_id);
             let mut session = ChildSession::spawn(build_ssh_command(&addr, &remote_cmd))?;
             let result = async {
                 let features = sender_handshake(session.framed_mut()?, false, false).await?;
@@ -1111,7 +1114,7 @@ async fn run_ssh_parallel_block_workers(
 
 async fn handle_request_full_copy_message<T>(
     framed: &mut Framed<T, PxsCodec>,
-    rel_path: &str,
+    rel_path: &[u8],
     source_reader: Arc<SourceReadContext>,
     metadata: FileMetadata,
     progress: &Arc<ProgressBar>,
@@ -1165,7 +1168,7 @@ where
 
 async fn handle_request_hashes_message<T>(
     framed: &mut Framed<T, PxsCodec>,
-    rel_path: &str,
+    rel_path: &[u8],
     source_reader: Arc<SourceReadContext>,
 ) -> Result<()>
 where
@@ -1181,7 +1184,7 @@ where
     .await??;
     framed
         .send(serialize_message(&Message::BlockHashes {
-            path: rel_path.to_string(),
+            path: rel_path.to_vec(),
             hashes,
         })?)
         .await?;
@@ -1190,7 +1193,7 @@ where
 
 async fn handle_request_blocks_message<T>(
     framed: &mut Framed<T, PxsCodec>,
-    rel_path: &str,
+    rel_path: &[u8],
     source_reader: Arc<SourceReadContext>,
     metadata: FileMetadata,
     indices: Vec<u32>,
@@ -1225,13 +1228,13 @@ struct RemoteFileSyncOptions {
 }
 
 struct RemoteFileContext<'a> {
-    rel_path: String,
+    rel_path: Vec<u8>,
     path: &'a Path,
     metadata: FileMetadata,
 }
 
 impl RemoteFileContext<'_> {
-    fn ensure_expected_path(&self, received_path: &str) -> Result<()> {
+    fn ensure_expected_path(&self, received_path: &[u8]) -> Result<()> {
         ensure_expected_protocol_path(&self.rel_path, received_path)
     }
 }
@@ -1544,7 +1547,7 @@ where
             context.ensure_expected_path(received_path)?;
             anyhow::bail!(
                 "Checksum mismatch for {}: destination file differs from source after transfer",
-                context.rel_path
+                display_protocol_path(&context.rel_path)
             );
         }
         Message::EndOfFile {
@@ -1555,7 +1558,10 @@ where
             Ok(Some(RemoteFileMessageOutcome::Continue))
         }
         Message::Error(error_message) => {
-            anyhow::bail!("Remote error for {}: {error_message}", context.rel_path);
+            anyhow::bail!(
+                "Remote error for {}: {error_message}",
+                display_protocol_path(&context.rel_path)
+            );
         }
         _ => Ok(None),
     }
@@ -1607,7 +1613,9 @@ where
         metadata: FileMetadata::from(tokio::fs::metadata(path).await?),
     };
     let mut source_reader: Option<Arc<SourceReadContext>> = None;
-    options.progress.set_message(context.rel_path.clone());
+    options
+        .progress
+        .set_message(display_protocol_path(&context.rel_path));
     send_sync_file_message(
         framed,
         &context.rel_path,
@@ -1697,7 +1705,7 @@ mod tests {
 
         send_block_batch(
             &mut sender_framed,
-            "file.bin",
+            b"file.bin",
             blocks,
             &progress,
             TransportFeatures {
@@ -1713,7 +1721,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing block batch"))??;
         match deserialize_message(&msg)? {
             Message::ApplyBlocksCompressed { path, compressed } => {
-                assert_eq!(path, "file.bin");
+                assert_eq!(path, b"file.bin");
                 let payload = lz4_flex::decompress_size_prepended(&compressed)
                     .map_err(|e| anyhow::anyhow!(e))?;
                 let blocks = deserialize_block_batch(&payload)?;
@@ -1749,7 +1757,7 @@ mod tests {
 
         send_block_batch(
             &mut sender_framed,
-            "file.bin",
+            b"file.bin",
             blocks,
             &progress,
             TransportFeatures::default(),
@@ -1762,7 +1770,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing block batch"))??;
         match deserialize_message(&msg)? {
             Message::ApplyBlocks { path, blocks } => {
-                assert_eq!(path, "file.bin");
+                assert_eq!(path, b"file.bin");
                 assert_eq!(blocks.len(), 1);
             }
             other => anyhow::bail!("expected uncompressed blocks, got {other:?}"),

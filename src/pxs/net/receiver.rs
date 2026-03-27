@@ -2,7 +2,8 @@ use super::{
     BLOCK_SIZE, RemoteSyncOptions,
     codec::PxsCodec,
     path::{
-        ensure_expected_protocol_path, resolve_protocol_path, resolve_requested_root,
+        display_protocol_path, ensure_expected_protocol_path, protocol_path_depth,
+        relative_protocol_path, resolve_protocol_path, resolve_requested_root,
         validate_protocol_path,
     },
     protocol::{
@@ -15,12 +16,14 @@ use super::{
     },
     ssh::{ChildSession, build_ssh_command, build_ssh_pull_command},
 };
-use crate::pxs::tools;
+use crate::pxs::tools::{self, DEFAULT_THRESHOLD};
 use anyhow::Result;
 use futures_util::SinkExt;
 use indicatif::ProgressBar;
 use std::{
     collections::{HashMap, HashSet},
+    ffi::OsStr,
+    os::unix::ffi::OsStrExt,
     os::unix::fs::{FileExt, MetadataExt},
     path::{Path, PathBuf},
     sync::{
@@ -44,7 +47,7 @@ struct PendingFile {
 }
 
 struct SingleFileSession {
-    protocol_path: String,
+    protocol_path: Vec<u8>,
     target_path: PathBuf,
 }
 
@@ -106,10 +109,10 @@ struct ClientHandlingOptions {
 }
 
 struct ClientState {
-    pending_files: HashMap<String, PendingFile>,
-    file_transfers: HashMap<String, FileTransferState>,
+    pending_files: HashMap<Vec<u8>, PendingFile>,
+    file_transfers: HashMap<Vec<u8>, FileTransferState>,
     progress: Option<Arc<ProgressBar>>,
-    dir_metadata: Vec<(String, FileMetadata)>,
+    dir_metadata: Vec<(Vec<u8>, FileMetadata)>,
     allow_root: PathBuf,
     dst_root: PathBuf,
     single_file_session: Option<SingleFileSession>,
@@ -117,7 +120,7 @@ struct ClientState {
     protocol_state: ProtocolState,
     session_fsync_override: Option<bool>,
     delete_mode: DeleteMode,
-    source_paths: HashSet<String>,
+    source_paths: HashSet<Vec<u8>>,
     parallel_config: Option<ParallelTransferConfig>,
     control_session_permit: Option<OwnedSemaphorePermit>,
 }
@@ -168,7 +171,7 @@ impl ClientState {
     /// Returns an error if the staging file cannot be created.
     fn prepare_pending_file(
         &mut self,
-        path: &str,
+        path: &[u8],
         final_path: &Path,
         size: u64,
         seed_from_existing: bool,
@@ -185,7 +188,7 @@ impl ClientState {
             .write(true)
             .open(staged_file.path())?;
         self.pending_files.insert(
-            path.to_string(),
+            path.to_vec(),
             PendingFile {
                 staged_file,
                 file: Some(file),
@@ -234,13 +237,13 @@ impl ClientState {
 
     fn set_transfer_state(
         &mut self,
-        path: &str,
+        path: &[u8],
         metadata: FileMetadata,
         checksum: bool,
         phase: TransferPhase,
     ) {
         self.file_transfers.insert(
-            path.to_string(),
+            path.to_vec(),
             FileTransferState {
                 metadata,
                 checksum,
@@ -249,23 +252,27 @@ impl ClientState {
         );
     }
 
-    fn transfer_state(&self, path: &str) -> Result<FileTransferState> {
-        self.file_transfers
-            .get(path)
-            .copied()
-            .ok_or_else(|| anyhow::anyhow!("missing active transfer state for path: {path}"))
+    fn transfer_state(&self, path: &[u8]) -> Result<FileTransferState> {
+        self.file_transfers.get(path).copied().ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing active transfer state for path: {}",
+                display_protocol_path(path)
+            )
+        })
     }
 
-    fn update_transfer_phase(&mut self, path: &str, phase: TransferPhase) -> Result<()> {
-        let transfer = self
-            .file_transfers
-            .get_mut(path)
-            .ok_or_else(|| anyhow::anyhow!("missing active transfer state for path: {path}"))?;
+    fn update_transfer_phase(&mut self, path: &[u8], phase: TransferPhase) -> Result<()> {
+        let transfer = self.file_transfers.get_mut(path).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing active transfer state for path: {}",
+                display_protocol_path(path)
+            )
+        })?;
         transfer.phase = phase;
         Ok(())
     }
 
-    fn clear_transfer_state(&mut self, path: &str) {
+    fn clear_transfer_state(&mut self, path: &[u8]) {
         self.file_transfers.remove(path);
     }
 
@@ -292,11 +299,13 @@ impl ClientState {
         Ok(())
     }
 
-    fn ensure_parallel_transfer_record(&mut self, path: &str) -> Result<String> {
-        let pending_file = self
-            .pending_files
-            .get_mut(path)
-            .ok_or_else(|| anyhow::anyhow!("missing pending file for path: {path}"))?;
+    fn ensure_parallel_transfer_record(&mut self, path: &[u8]) -> Result<String> {
+        let pending_file = self.pending_files.get_mut(path).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing pending file for path: {}",
+                display_protocol_path(path)
+            )
+        })?;
         if let Some(record) = &pending_file.parallel_transfer {
             return Ok(record.id.clone());
         }
@@ -311,7 +320,7 @@ impl ClientState {
         Ok(transfer_id)
     }
 
-    fn resolve_transfer_path(&self, path: &str) -> Result<PathBuf> {
+    fn resolve_transfer_path(&self, path: &[u8]) -> Result<PathBuf> {
         if let Some(single_file) = &self.single_file_session
             && single_file.protocol_path == path
         {
@@ -325,12 +334,12 @@ impl ClientState {
 fn resolve_single_file_target(
     allow_root: &Path,
     requested_root: &Path,
-    file_name: &str,
+    file_name: &[u8],
 ) -> Result<PathBuf> {
     validate_protocol_path(file_name)?;
 
     let target_path = match std::fs::symlink_metadata(requested_root) {
-        Ok(meta) if meta.is_dir() => requested_root.join(file_name),
+        Ok(meta) if meta.is_dir() => requested_root.join(OsStr::from_bytes(file_name)),
         Ok(_) => requested_root.to_path_buf(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => requested_root.to_path_buf(),
         Err(error) => return Err(error.into()),
@@ -391,7 +400,7 @@ fn cleanup_pending_file(mut pending_file: PendingFile) -> Result<()> {
 
 fn create_parallel_transfer_record(
     dst_root: &Path,
-    expected_path: &str,
+    expected_path: &[u8],
     staged_path: &Path,
 ) -> Result<ParallelTransferRecord> {
     let transfer_root = transfer_state_root(dst_root);
@@ -410,7 +419,7 @@ fn create_parallel_transfer_record(
                 };
                 let path_file = record_dir.join(TRANSFER_PATH_FILENAME);
                 let staged_link = record_dir.join(TRANSFER_STAGED_LINK_NAME);
-                if let Err(error) = std::fs::write(&path_file, expected_path.as_bytes()) {
+                if let Err(error) = std::fs::write(&path_file, expected_path) {
                     let _ = remove_parallel_transfer_record(&record_dir);
                     return Err(error.into());
                 }
@@ -429,22 +438,18 @@ fn create_parallel_transfer_record(
     }
 }
 
-fn resolve_parallel_transfer_record(
-    dst_root: &Path,
-    transfer_id: &str,
-    expected_path: &str,
-) -> Result<PathBuf> {
+fn load_parallel_transfer_record(dst_root: &Path, transfer_id: &str) -> Result<(Vec<u8>, PathBuf)> {
     let record_dir = transfer_record_dir(dst_root, transfer_id)?;
     tools::ensure_no_symlink_ancestors_under_root(dst_root, &record_dir)?;
     let recorded_path =
-        std::fs::read_to_string(record_dir.join(TRANSFER_PATH_FILENAME)).map_err(|error| {
+        std::fs::read(record_dir.join(TRANSFER_PATH_FILENAME)).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 anyhow::anyhow!("unknown transfer id: {transfer_id}")
             } else {
                 anyhow::Error::from(error)
             }
         })?;
-    ensure_expected_protocol_path(recorded_path.trim_end_matches('\n'), expected_path)?;
+    validate_protocol_path(&recorded_path)?;
     let staged_path =
         std::fs::read_link(record_dir.join(TRANSFER_STAGED_LINK_NAME)).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -453,6 +458,16 @@ fn resolve_parallel_transfer_record(
                 anyhow::Error::from(error)
             }
         })?;
+    Ok((recorded_path, staged_path))
+}
+
+fn resolve_parallel_transfer_record(
+    dst_root: &Path,
+    transfer_id: &str,
+    expected_path: &[u8],
+) -> Result<PathBuf> {
+    let (recorded_path, staged_path) = load_parallel_transfer_record(dst_root, transfer_id)?;
+    ensure_expected_protocol_path(&recorded_path, expected_path)?;
     Ok(staged_path)
 }
 
@@ -467,7 +482,7 @@ pub async fn run_pull_client(addr: &str, dst_root: &Path, fsync: bool) -> Result
         dst_root,
         RemoteSyncOptions {
             path: None,
-            threshold: 0.5,
+            threshold: DEFAULT_THRESHOLD,
             features: super::RemoteFeatureOptions {
                 checksum: false,
                 delete: false,
@@ -505,7 +520,7 @@ pub async fn run_pull_client_with_options(
     let mut state = perform_initial_handshake(&mut framed, dst_root, &client_options).await?;
     framed
         .send(serialize_message(&Message::PullRequest {
-            path: options.path.map(str::to_string),
+            path: options.path.map(|path| path.as_bytes().to_vec()),
             threshold: options.threshold,
             checksum: options.features.checksum,
             delete: options.features.delete,
@@ -601,40 +616,37 @@ pub async fn run_stdio_receiver(
 pub async fn run_stdio_chunk_writer(
     dst_root: &Path,
     transfer_id: &str,
-    expected_path: &str,
     _quiet: bool,
 ) -> Result<()> {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     let combined = tokio::io::join(stdin, stdout);
     let mut framed = Framed::new(combined, PxsCodec);
-    handle_chunk_writer_connection(&mut framed, dst_root, transfer_id, expected_path).await
+    handle_chunk_writer_connection(&mut framed, dst_root, transfer_id).await
 }
 
 async fn handle_chunk_writer_connection<T>(
     framed: &mut Framed<T, PxsCodec>,
     dst_root: &Path,
     transfer_id: &str,
-    expected_path: &str,
 ) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     tools::ensure_no_symlink_ancestors_under_root(dst_root, dst_root)?;
-    validate_protocol_path(expected_path)?;
-    let staged_path = resolve_parallel_transfer_record(dst_root, transfer_id, expected_path)?;
+    let (expected_path, staged_path) = load_parallel_transfer_record(dst_root, transfer_id)?;
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(staged_path)?;
-    handle_chunk_writer_session(framed, &file, expected_path, false).await
+    handle_chunk_writer_session(framed, &file, &expected_path, false).await
 }
 
 async fn handle_attached_chunk_writer_start<T>(
     framed: &mut Framed<T, PxsCodec>,
     dst_root: &Path,
     transfer_id: &str,
-    expected_path: &str,
+    expected_path: &[u8],
 ) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
@@ -652,7 +664,7 @@ where
 async fn handle_chunk_writer_session<T>(
     framed: &mut Framed<T, PxsCodec>,
     file: &std::fs::File,
-    expected_path: &str,
+    expected_path: &[u8],
     handshake_complete: bool,
 ) -> Result<()>
 where
@@ -760,8 +772,8 @@ where
 }
 
 async fn handle_sync_symlink(
-    path: String,
-    target: String,
+    path: Vec<u8>,
+    target: Vec<u8>,
     metadata: FileMetadata,
     dst_root: &Path,
     fsync: bool,
@@ -772,7 +784,8 @@ async fn handle_sync_symlink(
     {
         tokio::fs::create_dir_all(parent).await?;
     }
-    let prepared_path = tools::create_prepared_symlink(Path::new(&target), &full_path)?;
+    let prepared_path =
+        tools::create_prepared_symlink(Path::new(OsStr::from_bytes(&target)), &full_path)?;
     if let Err(error) = apply_file_metadata(&prepared_path, &metadata) {
         let _ = std::fs::remove_file(&prepared_path);
         return Err(error);
@@ -798,14 +811,14 @@ fn parallel_transfer_config_for(
     Some(config)
 }
 
-fn pending_transfer_id(state: &mut ClientState, path: &str) -> Result<String> {
+fn pending_transfer_id(state: &mut ClientState, path: &[u8]) -> Result<String> {
     state.ensure_parallel_transfer_record(path)
 }
 
 async fn handle_sync_file<T>(
     framed: &mut Framed<T, PxsCodec>,
     state: &mut ClientState,
-    path: String,
+    path: Vec<u8>,
     metadata: FileMetadata,
     threshold: f32,
     checksum: bool,
@@ -813,7 +826,11 @@ async fn handle_sync_file<T>(
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    tracing::debug!("Syncing file: {path} ({} bytes)", metadata.size);
+    tracing::debug!(
+        "Syncing file: {} ({} bytes)",
+        display_protocol_path(&path),
+        metadata.size
+    );
     let full_path = state.resolve_transfer_path(&path)?;
     let progress = state.progress.clone();
     state.clear_transfer_state(&path);
@@ -844,7 +861,7 @@ where
                 state.prepare_pending_file(&path, &full_path, metadata.size, false, checksum)?;
                 state.set_transfer_state(&path, metadata, checksum, TransferPhase::Content);
                 if let Some(progress) = &progress {
-                    progress.set_message(format!("Full copy: {path}"));
+                    progress.set_message(format!("Full copy: {}", display_protocol_path(&path)));
                 }
                 if parallel_transfer_config_for(state, metadata).is_some() {
                     let transfer_id = pending_transfer_id(state, &path)?;
@@ -863,7 +880,7 @@ where
             }
 
             if let Some(progress) = &progress {
-                progress.set_message(format!("Hashing: {path}"));
+                progress.set_message(format!("Hashing: {}", display_protocol_path(&path)));
             }
             state.set_transfer_state(&path, metadata, checksum, TransferPhase::Hashes);
             framed
@@ -875,7 +892,7 @@ where
         state.prepare_pending_file(&path, &full_path, metadata.size, false, checksum)?;
         state.set_transfer_state(&path, metadata, checksum, TransferPhase::Content);
         if let Some(progress) = &progress {
-            progress.set_message(format!("Full copy: {path}"));
+            progress.set_message(format!("Full copy: {}", display_protocol_path(&path)));
         }
         if parallel_transfer_config_for(state, metadata).is_some() {
             let transfer_id = pending_transfer_id(state, &path)?;
@@ -896,7 +913,7 @@ where
     state.prepare_pending_file(&path, &full_path, metadata.size, false, checksum)?;
     state.set_transfer_state(&path, metadata, checksum, TransferPhase::Content);
     if let Some(progress) = &progress {
-        progress.set_message(format!("Full copy: {path}"));
+        progress.set_message(format!("Full copy: {}", display_protocol_path(&path)));
     }
     if parallel_transfer_config_for(state, metadata).is_some() {
         let transfer_id = pending_transfer_id(state, &path)?;
@@ -917,7 +934,7 @@ where
 fn handle_sync_dir_message(
     state: &mut ClientState,
     dst_root: &Path,
-    path: String,
+    path: Vec<u8>,
     metadata: FileMetadata,
     fsync: bool,
 ) -> Result<()> {
@@ -933,7 +950,7 @@ fn handle_sync_dir_message(
 async fn handle_sync_file_message<T>(
     framed: &mut Framed<T, PxsCodec>,
     state: &mut ClientState,
-    path: String,
+    path: Vec<u8>,
     metadata: FileMetadata,
     threshold: f32,
     checksum: bool,
@@ -943,7 +960,7 @@ where
 {
     let progress = state.progress.clone();
     if let Some(progress) = &progress {
-        progress.set_message(path.clone());
+        progress.set_message(display_protocol_path(&path));
     }
 
     handle_sync_file(framed, state, path, metadata, threshold, checksum).await
@@ -952,7 +969,7 @@ where
 async fn request_full_copy_for_path<T>(
     framed: &mut Framed<T, PxsCodec>,
     state: &mut ClientState,
-    path: String,
+    path: Vec<u8>,
     full_path: &Path,
     metadata: FileMetadata,
     checksum: bool,
@@ -971,7 +988,7 @@ where
 async fn request_missing_blocks_for_path<T>(
     framed: &mut Framed<T, PxsCodec>,
     state: &mut ClientState,
-    path: String,
+    path: Vec<u8>,
     transfer: FileTransferState,
     full_path: &Path,
     requested: Vec<u32>,
@@ -1012,7 +1029,7 @@ where
 async fn handle_block_hashes_message<T>(
     framed: &mut Framed<T, PxsCodec>,
     state: &mut ClientState,
-    path: String,
+    path: Vec<u8>,
     hashes: Vec<u64>,
 ) -> Result<()>
 where
@@ -1022,7 +1039,8 @@ where
     let transfer = state.transfer_state(&path)?;
     anyhow::ensure!(
         transfer.phase == TransferPhase::Hashes,
-        "received block hashes out of sequence for path: {path}"
+        "received block hashes out of sequence for path: {}",
+        display_protocol_path(&path)
     );
 
     let requested = if let Some(pending_file) = state.pending_files.get(&path) {
@@ -1094,7 +1112,7 @@ where
 
 fn handle_apply_blocks_message(
     state: &mut ClientState,
-    path: &str,
+    path: &[u8],
     blocks: Vec<Block>,
 ) -> Result<()> {
     if let Some(progress) = &state.progress {
@@ -1104,7 +1122,7 @@ fn handle_apply_blocks_message(
     handle_apply_blocks(&mut state.pending_files, path, blocks)
 }
 
-fn handle_end_of_file_message(state: &mut ClientState, path: &str) -> Result<()> {
+fn handle_end_of_file_message(state: &mut ClientState, path: &[u8]) -> Result<()> {
     validate_protocol_path(path)?;
     if let Some(pending_file) = state.pending_files.remove(path) {
         cleanup_pending_file(pending_file)?;
@@ -1119,8 +1137,8 @@ fn handle_session_options(
     remote_delete_override: RemoteDeleteOverride,
     fsync: bool,
     delete: bool,
-    path: Option<&str>,
-    single_file_name: Option<&str>,
+    path: Option<&[u8]>,
+    single_file_name: Option<&[u8]>,
 ) -> Result<()> {
     if fsync {
         anyhow::ensure!(
@@ -1148,7 +1166,7 @@ fn handle_session_options(
         let target_path =
             resolve_single_file_target(&state.allow_root, &state.dst_root, single_file_name)?;
         state.single_file_session = Some(SingleFileSession {
-            protocol_path: single_file_name.to_string(),
+            protocol_path: single_file_name.to_vec(),
             target_path,
         });
     } else {
@@ -1384,10 +1402,10 @@ where
 
 fn finalize_directory_metadata(
     dst_root: &Path,
-    mut dir_metadata: Vec<(String, FileMetadata)>,
+    mut dir_metadata: Vec<(Vec<u8>, FileMetadata)>,
     fsync: bool,
 ) -> Result<()> {
-    dir_metadata.sort_by_key(|(path, _)| std::cmp::Reverse(path.split('/').count()));
+    dir_metadata.sort_by_key(|(path, _)| std::cmp::Reverse(protocol_path_depth(path)));
     for (path, metadata) in dir_metadata {
         let full_path = resolve_protocol_path(dst_root, &path)?;
         apply_file_metadata(&full_path, &metadata)?;
@@ -1398,27 +1416,9 @@ fn finalize_directory_metadata(
     Ok(())
 }
 
-fn protocol_relative_path(root: &Path, path: &Path) -> Result<String> {
-    let rel_path = path
-        .strip_prefix(root)
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "path {} is not under root {}",
-                path.display(),
-                root.display()
-            )
-        })?
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy().to_string())
-        .collect::<Vec<_>>()
-        .join("/");
-    validate_protocol_path(&rel_path)?;
-    Ok(rel_path)
-}
-
 fn delete_extraneous_destination_entries(
     dst_root: &Path,
-    source_paths: &HashSet<String>,
+    source_paths: &HashSet<Vec<u8>>,
     ignores: &[String],
     fsync: bool,
 ) -> Result<()> {
@@ -1462,7 +1462,7 @@ fn delete_extraneous_destination_entries(
             continue;
         }
 
-        let rel_path = protocol_relative_path(dst_root, path)?;
+        let rel_path = relative_protocol_path(dst_root, path)?;
         if !source_paths.contains(&rel_path) {
             to_delete.push(path.to_path_buf());
         }
@@ -1667,24 +1667,29 @@ fn write_blocks_to_file(file: &std::fs::File, blocks: Vec<Block>) -> Result<()> 
 }
 
 fn handle_apply_blocks(
-    pending_files: &mut HashMap<String, PendingFile>,
-    path: &str,
+    pending_files: &mut HashMap<Vec<u8>, PendingFile>,
+    path: &[u8],
     blocks: Vec<Block>,
 ) -> Result<()> {
-    let pending_file = pending_files
-        .get_mut(path)
-        .ok_or_else(|| anyhow::anyhow!("missing pending file for path: {path}"))?;
-    let file = pending_file
-        .file
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("pending file already finalized for path: {path}"))?;
+    let pending_file = pending_files.get_mut(path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "missing pending file for path: {}",
+            display_protocol_path(path)
+        )
+    })?;
+    let file = pending_file.file.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "pending file already finalized for path: {}",
+            display_protocol_path(path)
+        )
+    })?;
     write_blocks_to_file(file, blocks)
 }
 
 async fn handle_apply_metadata<T>(
     framed: &mut Framed<T, PxsCodec>,
     state: &mut ClientState,
-    path: String,
+    path: Vec<u8>,
     metadata: FileMetadata,
     fsync: bool,
 ) -> Result<()>
@@ -1699,7 +1704,8 @@ where
                 transfer.phase,
                 TransferPhase::Content | TransferPhase::Metadata
             ),
-            "received metadata out of sequence for path: {path}"
+            "received metadata out of sequence for path: {}",
+            display_protocol_path(&path)
         );
         if let Some(file) = pending_file.file.take() {
             file.set_len(metadata.size)?;
@@ -1717,15 +1723,19 @@ where
         if pending_file.checksum {
             state.update_transfer_phase(&path, TransferPhase::Checksum)?;
             framed
-                .send(serialize_message(&Message::MetadataApplied { path })?)
+                .send(serialize_message(&Message::MetadataApplied {
+                    path: path.clone(),
+                })?)
                 .await?;
             return Ok(());
         }
 
-        let mut pending_file = state
-            .pending_files
-            .remove(&path)
-            .ok_or_else(|| anyhow::anyhow!("missing pending file for path: {path}"))?;
+        let mut pending_file = state.pending_files.remove(&path).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing pending file for path: {}",
+                display_protocol_path(&path)
+            )
+        })?;
         if let Err(error) = pending_file.staged_file.commit() {
             let _ = cleanup_pending_file(pending_file);
             return Err(error);
@@ -1738,14 +1748,17 @@ where
         }
         state.clear_transfer_state(&path);
         framed
-            .send(serialize_message(&Message::MetadataApplied { path })?)
+            .send(serialize_message(&Message::MetadataApplied {
+                path: path.clone(),
+            })?)
             .await?;
         return Ok(());
     }
 
     anyhow::ensure!(
         transfer.phase == TransferPhase::Metadata,
-        "received metadata without staged file for path: {path}"
+        "received metadata without staged file for path: {}",
+        display_protocol_path(&path)
     );
     if let Ok(meta) = tokio::fs::symlink_metadata(&full_path).await
         && meta.is_file()
@@ -1775,7 +1788,7 @@ where
 async fn handle_verify_checksum<T>(
     framed: &mut Framed<T, PxsCodec>,
     state: &mut ClientState,
-    path: &str,
+    path: &[u8],
     expected_hash: &[u8; 32],
     fsync: bool,
 ) -> Result<()>
@@ -1786,7 +1799,8 @@ where
     let transfer = state.transfer_state(path)?;
     anyhow::ensure!(
         transfer.phase == TransferPhase::Checksum,
-        "received checksum verification out of sequence for path: {path}"
+        "received checksum verification out of sequence for path: {}",
+        display_protocol_path(path)
     );
     let actual_hash = if let Some(mut pending_file) = state.pending_files.remove(path) {
         let hash = match tools::blake3_file_hash(pending_file.staged_file.path()).await {
@@ -1813,7 +1827,7 @@ where
             state.clear_transfer_state(path);
             framed
                 .send(serialize_message(&Message::ChecksumMismatch {
-                    path: path.to_string(),
+                    path: path.to_vec(),
                 })?)
                 .await?;
             return Ok(());
@@ -1826,13 +1840,13 @@ where
     if &actual_hash == expected_hash {
         framed
             .send(serialize_message(&Message::ChecksumVerified {
-                path: path.to_string(),
+                path: path.to_vec(),
             })?)
             .await?;
     } else {
         framed
             .send(serialize_message(&Message::ChecksumMismatch {
-                path: path.to_string(),
+                path: path.to_vec(),
             })?)
             .await?;
     }

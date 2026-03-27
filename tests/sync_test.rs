@@ -198,6 +198,24 @@ async fn test_threshold_full_copy_decision() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_threshold_full_copy_decision_above_one_mebibyte_respects_user_value() -> Result<()> {
+    let dir = tempdir()?;
+    let src_path = dir.path().join("src-large.bin");
+    let dst_path = dir.path().join("dst-small.bin");
+
+    fs::write(&src_path, vec![1_u8; 2 * 1024 * 1024])?;
+    fs::write(&dst_path, vec![2_u8; 384 * 1024])?;
+
+    let full_copy = tools::should_use_full_copy(&src_path, &dst_path, 0.2).await?;
+    assert!(full_copy);
+
+    let full_copy = tools::should_use_full_copy(&src_path, &dst_path, 0.1).await?;
+    assert!(!full_copy);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_symlink_over_directory() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
@@ -354,6 +372,35 @@ async fn test_sync_dir_with_delete_and_ignore() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_sync_dir_with_delete_preserves_final_directory_mtime() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempdir()?;
+    let src_dir = dir.path().join("src");
+    let dst_dir = dir.path().join("dst");
+
+    fs::create_dir_all(src_dir.join("sub"))?;
+    fs::create_dir_all(dst_dir.join("sub"))?;
+    fs::write(src_dir.join("sub/keep.txt"), "keep")?;
+    fs::write(dst_dir.join("sub/keep.txt"), "keep")?;
+    fs::write(dst_dir.join("sub/stale.txt"), "stale")?;
+
+    let time = FileTime::from_unix_time(1_700_000_100, 0);
+    set_file_times(src_dir.join("sub"), time, time)?;
+    set_file_times(&src_dir, time, time)?;
+
+    let options = SyncOptions::new(1.0, false, false, true, Vec::new(), false, false);
+    sync::sync_dir(&src_dir, &dst_dir, &options).await?;
+
+    let src_meta = fs::metadata(src_dir.join("sub"))?;
+    let dst_meta = fs::metadata(dst_dir.join("sub"))?;
+    assert_eq!(src_meta.mtime(), dst_meta.mtime());
+    assert_eq!(src_meta.mtime_nsec(), dst_meta.mtime_nsec());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_sync_with_checksum_force() -> Result<()> {
     let dir = tempdir()?;
     let src_path = dir.path().join("src.txt");
@@ -504,6 +551,34 @@ async fn test_sync_broken_symlink_at_destination() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_sync_dir_replaces_matching_leaf_symlink_file() -> Result<()> {
+    let dir = tempdir()?;
+    let src_dir = dir.path().join("src");
+    let dst_dir = dir.path().join("dst");
+    let other_dir = dir.path().join("other");
+    let src_file = src_dir.join("item.txt");
+    let target_file = other_dir.join("target.txt");
+    let dst_file = dst_dir.join("item.txt");
+
+    fs::create_dir_all(&src_dir)?;
+    fs::create_dir_all(&dst_dir)?;
+    fs::create_dir_all(&other_dir)?;
+    fs::write(&src_file, "hello world")?;
+    fs::write(&target_file, "hello world")?;
+    std::os::unix::fs::symlink(&target_file, &dst_file)?;
+    let time = FileTime::from_unix_time(1_700_000_001, 0);
+    set_file_times(&src_file, time, time)?;
+    set_file_times(&target_file, time, time)?;
+
+    let options = SyncOptions::new(1.0, false, false, false, Vec::new(), false, false);
+    sync::sync_dir(&src_dir, &dst_dir, &options).await?;
+
+    assert!(!fs::symlink_metadata(&dst_file)?.file_type().is_symlink());
+    assert_eq!(fs::read_to_string(&dst_file)?, "hello world");
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_sync_source_broken_symlink() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
@@ -528,6 +603,31 @@ async fn test_sync_source_broken_symlink() -> Result<()> {
         std::path::PathBuf::from("non_existent")
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sync_single_file_replaces_matching_leaf_symlink() -> Result<()> {
+    let dir = tempdir()?;
+    let src_file = dir.path().join("source.txt");
+    let dst_dir = dir.path().join("dst");
+    let other_dir = dir.path().join("other");
+    let target_file = other_dir.join("target.txt");
+    let dst_file = dst_dir.join("out.txt");
+
+    fs::create_dir_all(&dst_dir)?;
+    fs::create_dir_all(&other_dir)?;
+    fs::write(&src_file, "hello world")?;
+    fs::write(&target_file, "hello world")?;
+    std::os::unix::fs::symlink(&target_file, &dst_file)?;
+    let time = FileTime::from_unix_time(1_700_000_000, 0);
+    set_file_times(&src_file, time, time)?;
+    set_file_times(&target_file, time, time)?;
+
+    sync::sync_changed_blocks(&src_file, &dst_file, false, false, true).await?;
+
+    assert!(!fs::symlink_metadata(&dst_file)?.file_type().is_symlink());
+    assert_eq!(fs::read_to_string(&dst_file)?, "hello world");
     Ok(())
 }
 
@@ -742,5 +842,26 @@ async fn test_sync_stats_aggregation() -> Result<()> {
     assert_eq!(stats.updated_blocks, 8);
     assert_eq!(stats.total_blocks, 9);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sync_stats_aggregation_with_backpressure() -> Result<()> {
+    let dir = tempdir()?;
+    let src_dir = dir.path().join("src");
+    let dst_dir = dir.path().join("dst");
+    fs::create_dir_all(&src_dir)?;
+    fs::create_dir_all(&dst_dir)?;
+
+    let file_count = tools::MAX_PARALLELISM + 8;
+    for index in 0..file_count {
+        fs::write(src_dir.join(format!("file-{index}.bin")), [b'x'])?;
+    }
+
+    let options = SyncOptions::new(1.0, false, false, false, Vec::new(), false, false);
+    let stats = sync::sync_dir(&src_dir, &dst_dir, &options).await?;
+
+    assert_eq!(stats.updated_blocks, file_count);
+    assert_eq!(stats.total_blocks, file_count);
     Ok(())
 }

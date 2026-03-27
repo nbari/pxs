@@ -276,7 +276,7 @@ This repository includes [`sync.sh`](./sync.sh), a PostgreSQL-focused migration 
 *   **`--fsync` (-f)**: Force durable sync of committed file writes plus directory/symlink installs and final directory metadata. For SSH `sync --delete`, completion waits for delete finalization. Local `sync --delete` deletions are not yet crash-durable.
 *   **`--ignore` (-i)**: (Repeatable) Skip files/directories matching a glob pattern (e.g., `-i "*.log"`).
 *   **`--exclude-from` (-E)**: Read exclude patterns from a file (one pattern per line).
-*   **`--threshold` (-t)**: (Default: 0.5) If the destination file is less than X% the size of the source, perform a full copy instead of hashing.
+*   **`--threshold` (-t)**: (Default: 0.1) If the destination file is less than X% the size of the source, perform a full copy instead of hashing.
 *   **`--dry-run` (-n)**: Show what would have been transferred without making any changes.
 *   **`--verbose` (-v)**: Increase logging verbosity (use `-vv` for debug).
 *   **`--large-file-parallel-threshold`**: (Default: 1GiB) Enable SSH chunk-parallel transfer for files at or above this size when the source is local and the destination is remote. Use 0 to disable.

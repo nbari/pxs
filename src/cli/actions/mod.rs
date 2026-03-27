@@ -75,7 +75,6 @@ pub enum Action {
     InternalChunkWrite {
         dst: PathBuf,
         transfer_id: String,
-        path: String,
         quiet: bool,
     },
 }

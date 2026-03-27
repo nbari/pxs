@@ -3,6 +3,7 @@ use std::{os::unix::fs::MetadataExt, path::Path};
 use tokio::fs;
 
 const THRESHOLD_SCALE: u128 = 1_000_000;
+pub const DEFAULT_THRESHOLD: f32 = 0.1;
 
 fn metadata_mtime_nanos(meta: &std::fs::Metadata) -> Option<u32> {
     u32::try_from(meta.mtime_nsec()).ok()
@@ -34,8 +35,12 @@ pub async fn should_skip_file(src: &Path, dst: &Path, checksum: bool) -> Result<
         return Ok(false);
     }
 
+    let dst_meta = tokio::fs::symlink_metadata(dst).await?;
+    if !dst_meta.file_type().is_file() {
+        return Ok(false);
+    }
+
     let src_meta = tokio::fs::metadata(src).await?;
-    let dst_meta = tokio::fs::metadata(dst).await?;
     let src_size = src_meta.len();
     let dst_size = dst_meta.len();
 
@@ -79,13 +84,11 @@ pub async fn should_use_full_copy_meta(src_size: u64, dst: &Path, threshold: f32
         return Ok(false);
     }
 
-    let dst_meta = fs::metadata(dst).await?;
+    let dst_meta = fs::symlink_metadata(dst).await?;
+    if !dst_meta.file_type().is_file() {
+        return Ok(true);
+    }
     let dst_size = dst_meta.len();
-    let threshold = if src_size > 1024 * 1024 {
-        threshold.min(0.1)
-    } else {
-        threshold
-    };
 
     Ok(is_below_threshold(src_size, dst_size, threshold))
 }

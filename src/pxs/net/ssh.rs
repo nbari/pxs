@@ -40,11 +40,7 @@ pub(crate) fn build_ssh_push_command(dst_path: &str, fsync: bool, ignores: &[Str
 
 /// Build the remote pxs command used for SSH chunk-writer worker mode.
 #[must_use]
-pub(crate) fn build_ssh_chunk_writer_command(
-    dst_path: &str,
-    transfer_id: &str,
-    rel_path: &str,
-) -> String {
+pub(crate) fn build_ssh_chunk_writer_command(dst_path: &str, transfer_id: &str) -> String {
     let args = vec![
         "pxs".to_string(),
         "--stdio".to_string(),
@@ -54,8 +50,6 @@ pub(crate) fn build_ssh_chunk_writer_command(
         "--chunk-writer".to_string(),
         "--transfer-id".to_string(),
         transfer_id.to_string(),
-        "--chunk-path".to_string(),
-        rel_path.to_string(),
     ];
     build_remote_command(&args)
 }
@@ -219,12 +213,11 @@ mod tests {
     }
 
     #[test]
-    fn test_build_ssh_chunk_writer_command_quotes_paths() {
-        let command =
-            build_ssh_chunk_writer_command("/tmp/dst path", "deadbeef-42", "nested/it's-here");
+    fn test_build_ssh_chunk_writer_command_quotes_transfer() {
+        let command = build_ssh_chunk_writer_command("/tmp/dst path", "deadbeef-42");
         assert_eq!(
             command,
-            "'pxs' '--stdio' '--quiet' '--destination' '/tmp/dst path' '--chunk-writer' '--transfer-id' 'deadbeef-42' '--chunk-path' 'nested/it'\"'\"'s-here'"
+            "'pxs' '--stdio' '--quiet' '--destination' '/tmp/dst path' '--chunk-writer' '--transfer-id' 'deadbeef-42'"
         );
     }
 

@@ -244,10 +244,9 @@ async fn handle_internal_stdio_send_action(
 async fn handle_internal_chunk_write_action(
     dst: &Path,
     transfer_id: &str,
-    path: &str,
     quiet: bool,
 ) -> Result<()> {
-    crate::pxs::net::run_stdio_chunk_writer(dst, transfer_id, path, quiet).await
+    crate::pxs::net::run_stdio_chunk_writer(dst, transfer_id, quiet).await
 }
 
 async fn handle_listen_cli_action(
@@ -297,10 +296,9 @@ async fn handle_internal_send_cli_action(
 async fn handle_internal_chunk_write_cli_action(
     dst: &Path,
     transfer_id: &str,
-    path: &str,
     quiet: bool,
 ) -> Result<HandleOutcome> {
-    handle_internal_chunk_write_action(dst, transfer_id, path, quiet).await?;
+    handle_internal_chunk_write_action(dst, transfer_id, quiet).await?;
     Ok(HandleOutcome::PrintCompletion)
 }
 
@@ -529,9 +527,8 @@ async fn dispatch_remote_or_internal_action(action: Action) -> Result<(bool, Han
         Action::InternalChunkWrite {
             dst,
             transfer_id,
-            path,
             quiet,
-        } => dispatch_internal_chunk_write_variant(dst, transfer_id, path, quiet).await,
+        } => dispatch_internal_chunk_write_variant(dst, transfer_id, quiet).await,
         Action::Sync { .. } => unreachable!("sync action handled by dispatch_action"),
     }
 }
@@ -591,12 +588,11 @@ async fn dispatch_internal_send_variant(
 async fn dispatch_internal_chunk_write_variant(
     dst: PathBuf,
     transfer_id: String,
-    path: String,
     quiet: bool,
 ) -> Result<(bool, HandleOutcome)> {
     Ok((
         quiet,
-        handle_internal_chunk_write_cli_action(&dst, &transfer_id, &path, quiet).await?,
+        handle_internal_chunk_write_cli_action(&dst, &transfer_id, quiet).await?,
     ))
 }
 
