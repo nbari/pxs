@@ -148,7 +148,7 @@ pub(crate) fn record_staged_clone_attempt() {
     });
 }
 
-#[cfg(not(test))]
+#[cfg(all(not(test), target_os = "linux"))]
 pub(crate) fn record_staged_clone_attempt() {}
 
 #[cfg(test)]
@@ -158,7 +158,7 @@ pub(crate) fn record_staged_clone_success() {
     });
 }
 
-#[cfg(not(test))]
+#[cfg(all(not(test), target_os = "linux"))]
 pub(crate) fn record_staged_clone_success() {}
 
 #[cfg(test)]

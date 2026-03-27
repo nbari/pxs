@@ -1,9 +1,6 @@
 use crate::pxs::tools::{
     fs::preallocate,
-    probes::{
-        record_staged_clone_attempt, record_staged_clone_success, record_staged_copy_fallback,
-        record_staged_seed_invocation,
-    },
+    probes::{record_staged_copy_fallback, record_staged_seed_invocation},
 };
 use anyhow::{Context, Result};
 use std::{
@@ -14,6 +11,9 @@ use std::{
 
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
+
+#[cfg(target_os = "linux")]
+use crate::pxs::tools::probes::{record_staged_clone_attempt, record_staged_clone_success};
 
 static STAGED_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
