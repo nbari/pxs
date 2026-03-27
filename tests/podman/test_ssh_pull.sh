@@ -47,7 +47,7 @@ $DOCKER exec pxs-server bash -lc "mkdir -p \"$REMOTE_ROOT/nested\" && \
     touch -d '$SYNC_TIME' \"$REMOTE_ROOT/same.bin\" && \
     chown -R devops:devops \"$REMOTE_ROOT\""
 
-echo "Starting client and pulling directory..."
+echo "Starting client and syncing directory from the remote source..."
 $DOCKER run --name pxs-client \
     -t \
     --network "$NETWORK" \
@@ -64,8 +64,7 @@ $DOCKER run --name pxs-client \
              touch -d '$SYNC_TIME' /data/same.bin && \
              echo -e 'Host pxs-server\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/id_ed25519' > /home/devops/.ssh/config && \
              chown devops:devops /home/devops/.ssh/config && \
-             sudo -u devops pxs pull \"devops@pxs-server:$REMOTE_ROOT\" \
-             /data \
+             sudo -u devops pxs sync /data \"devops@pxs-server:$REMOTE_ROOT\" \
              --checksum \
              --ignore '*.tmp' \
              -vv && \
@@ -75,4 +74,4 @@ $DOCKER run --name pxs-client \
              [ \"\$(cat /data/nested/keep.txt)\" = '$EXPECTED_NESTED_CONTENT' ] && \
              [ ! -e /data/skip.tmp ]"
 
-echo "✅ SSH Pull test passed!"
+echo "✅ SSH sync-from-remote test passed!"

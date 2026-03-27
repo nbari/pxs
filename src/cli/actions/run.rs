@@ -83,6 +83,7 @@ async fn handle_push_action(
                 src,
                 path,
                 RemoteSyncOptions {
+                    path: None,
                     threshold: options.threshold,
                     features: RemoteFeatureOptions {
                         checksum: options.checksum,
@@ -114,9 +115,9 @@ async fn handle_push_action(
             )
             .await?;
         }
-        RemoteEndpoint::Tcp(addr) => {
+        RemoteEndpoint::Tcp { addr, path } => {
             info!(
-                "Connecting to {addr} to sync from {} (checksum: {})",
+                "Connecting to {addr} to sync {} into the remote destination (checksum: {})",
                 src.display(),
                 options.checksum
             );
@@ -124,6 +125,7 @@ async fn handle_push_action(
                 addr,
                 src,
                 RemoteSyncOptions {
+                    path: path.as_deref(),
                     threshold: options.threshold,
                     features: RemoteFeatureOptions {
                         checksum: options.checksum,
@@ -152,12 +154,13 @@ async fn handle_pull_action(
 ) -> Result<()> {
     match endpoint {
         RemoteEndpoint::Ssh { host, path } => {
-            info!("Pulling via SSH from {host}:{path} to {}", dst.display());
+            info!("Syncing via SSH from {host}:{path} into {}", dst.display());
             crate::pxs::net::run_ssh_receiver(
                 host,
                 dst,
                 path,
                 RemoteSyncOptions {
+                    path: None,
                     threshold,
                     features: RemoteFeatureOptions {
                         checksum,
@@ -173,12 +176,13 @@ async fn handle_pull_action(
         RemoteEndpoint::Stdio => {
             anyhow::bail!("stdio is not supported for pull mode");
         }
-        RemoteEndpoint::Tcp(addr) => {
-            info!("Connecting to {addr} to pull to {}", dst.display());
+        RemoteEndpoint::Tcp { addr, path } => {
+            info!("Connecting to {addr} to sync into {}", dst.display());
             crate::pxs::net::run_pull_client_with_options(
                 addr,
                 dst,
                 RemoteSyncOptions {
+                    path: path.as_deref(),
                     threshold,
                     features: RemoteFeatureOptions {
                         checksum,
@@ -768,7 +772,10 @@ mod tests {
         fs::create_dir_all(&dst)?;
 
         let error = match handle(Action::Sync {
-            src: SyncOperand::Remote(RemoteEndpoint::Tcp(String::from("127.0.0.1:9999"))),
+            src: SyncOperand::Remote(RemoteEndpoint::Tcp {
+                addr: String::from("127.0.0.1:9999"),
+                path: None,
+            }),
             dst: SyncOperand::Local(dst),
             threshold: 0.5,
             checksum: false,

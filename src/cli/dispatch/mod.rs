@@ -3,8 +3,8 @@ use clap::ArgMatches;
 use std::path::{Path, PathBuf};
 
 const PUBLIC_USAGE_HINT: &str = "public CLI now uses subcommands. Examples: \
-    `pxs sync SRC DST`, `pxs sync SRC user@host:/dst`, `pxs sync SRC host:port`, \
-    `pxs listen ADDR DST`, `pxs serve ADDR SRC`.";
+    `pxs sync DST SRC`, `pxs sync DST user@host:/src`, \
+    `pxs sync DST host:port/src`, `pxs listen ADDR ROOT`, `pxs serve ADDR ROOT`.";
 
 /// Main command dispatcher.
 ///
@@ -73,18 +73,17 @@ fn parse_remote_endpoint(endpoint: &str, allow_stdio: bool) -> anyhow::Result<Re
         return Ok(RemoteEndpoint::Stdio);
     }
 
-    if endpoint.contains('[') || endpoint.contains(']') {
-        let _ = split_endpoint_host_suffix(endpoint)?;
-    }
-
-    if endpoint.parse::<std::net::SocketAddr>().is_ok() {
-        return Ok(RemoteEndpoint::Tcp(endpoint.to_string()));
-    }
-
     if let Some(ssh) = parse_ssh_endpoint(endpoint)? {
         return Ok(RemoteEndpoint::Ssh {
             host: ssh.host,
             path: ssh.path,
+        });
+    }
+
+    if let Some(tcp) = parse_tcp_endpoint(endpoint)? {
+        return Ok(RemoteEndpoint::Tcp {
+            addr: tcp.addr,
+            path: tcp.path,
         });
     }
 
@@ -124,8 +123,12 @@ fn parse_sync_operand(value: &str) -> anyhow::Result<SyncOperand> {
         return Ok(SyncOperand::Remote(parse_remote_endpoint(value, false)?));
     }
 
-    if value.parse::<std::net::SocketAddr>().is_ok() {
-        return Ok(SyncOperand::Remote(RemoteEndpoint::Tcp(value.to_string())));
+    if value.contains('[') || value.contains(']') {
+        return Ok(SyncOperand::Remote(parse_remote_endpoint(value, false)?));
+    }
+
+    if parse_tcp_endpoint(value)?.is_some() {
+        return Ok(SyncOperand::Remote(parse_remote_endpoint(value, false)?));
     }
 
     Ok(SyncOperand::Local(PathBuf::from(value)))
@@ -188,8 +191,8 @@ fn build_sync_action(
 }
 
 fn handle_sync(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
-    let src_text = required_string(matches, "src")?;
     let dst_text = required_string(matches, "dst")?;
+    let src_text = required_string(matches, "src")?;
     let src = parse_sync_operand(&src_text)?;
     let dst = parse_sync_operand(&dst_text)?;
 
@@ -294,6 +297,11 @@ struct SshInfo {
     path: String,
 }
 
+struct TcpInfo {
+    addr: String,
+    path: Option<String>,
+}
+
 fn split_endpoint_host_suffix(endpoint: &str) -> anyhow::Result<Option<(&str, &str)>> {
     let mut bracket_depth = 0_u8;
     let mut first_colon = None;
@@ -367,6 +375,31 @@ fn parse_ssh_endpoint(endpoint: &str) -> anyhow::Result<Option<SshInfo>> {
     }))
 }
 
+fn parse_tcp_endpoint(endpoint: &str) -> anyhow::Result<Option<TcpInfo>> {
+    let Some((host, suffix)) = split_endpoint_host_suffix(endpoint)? else {
+        return Ok(None);
+    };
+
+    if host.contains('@') {
+        return Ok(None);
+    }
+
+    let (port_text, path) = if let Some((port, path)) = suffix.split_once('/') {
+        (port, Some(format!("/{path}")))
+    } else {
+        (suffix, None)
+    };
+
+    let Ok(port) = port_text.parse::<u16>() else {
+        return Ok(None);
+    };
+
+    Ok(Some(TcpInfo {
+        addr: format!("{host}:{port}"),
+        path,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::handler;
@@ -396,8 +429,8 @@ mod tests {
         let action = parse_action(&[
             "pxs",
             "sync",
-            &src_arg,
             &dst_arg,
+            &src_arg,
             "--threshold",
             "0.25",
             "--checksum",
@@ -518,9 +551,12 @@ mod tests {
 
         match action {
             Action::Sync {
-                dst: SyncOperand::Remote(RemoteEndpoint::Tcp(addr)),
+                dst: SyncOperand::Remote(RemoteEndpoint::Tcp { addr, path }),
                 ..
-            } => assert_eq!(addr, "[::1]:7878"),
+            } => {
+                assert_eq!(addr, "[::1]:7878");
+                assert!(path.is_none());
+            }
             other => anyhow::bail!("expected TCP push endpoint, got {other:?}"),
         }
 
@@ -547,12 +583,13 @@ mod tests {
 
         match action {
             Action::Sync {
-                dst: SyncOperand::Remote(RemoteEndpoint::Tcp(addr)),
+                dst: SyncOperand::Remote(RemoteEndpoint::Tcp { addr, path }),
                 large_file_parallel_threshold,
                 large_file_parallel_workers,
                 ..
             } => {
                 assert_eq!(addr, "127.0.0.1:7878");
+                assert!(path.is_none());
                 assert_eq!(large_file_parallel_threshold, 64 * 1024_u64.pow(2));
                 assert_eq!(large_file_parallel_workers, 3);
             }
@@ -726,11 +763,12 @@ mod tests {
         let action = parse_action(&["pxs", "pull", "127.0.0.1:9999", &dst_arg, "--checksum"])?;
         match action {
             Action::Sync {
-                src: SyncOperand::Remote(RemoteEndpoint::Tcp(addr)),
+                src: SyncOperand::Remote(RemoteEndpoint::Tcp { addr, path }),
                 checksum,
                 ..
             } => {
                 assert_eq!(addr, "127.0.0.1:9999");
+                assert!(path.is_none());
                 assert!(checksum);
             }
             other => anyhow::bail!("expected Action::Sync, got {other:?}"),
@@ -832,8 +870,8 @@ mod tests {
         let action = parse_action(&[
             "pxs",
             "sync",
-            &src_arg,
             &dst_arg,
+            &src_arg,
             "--ignore",
             "*.tmp",
             "--exclude-from",
@@ -845,6 +883,47 @@ mod tests {
                 assert_eq!(ignores, vec!["*.tmp", "*.log", "cache/"]);
             }
             other => anyhow::bail!("expected Action::Sync, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sync_tcp_endpoint_parses_embedded_remote_path() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        std::fs::create_dir_all(&src)?;
+        std::fs::create_dir_all(&dst)?;
+        let src_arg = src.to_string_lossy().to_string();
+        let dst_arg = dst.to_string_lossy().to_string();
+
+        let action = parse_action(&["pxs", "sync", &dst_arg, "backup:7878/snapshots/base"])?;
+
+        match action {
+            Action::Sync {
+                dst: SyncOperand::Local(_),
+                src: SyncOperand::Remote(RemoteEndpoint::Tcp { addr, path }),
+                ..
+            } => {
+                assert_eq!(addr, "backup:7878");
+                assert_eq!(path.as_deref(), Some("/snapshots/base"));
+            }
+            other => anyhow::bail!("expected TCP source endpoint, got {other:?}"),
+        }
+
+        let action = parse_action(&["pxs", "sync", "backup:7878/archive/out", &src_arg])?;
+
+        match action {
+            Action::Sync {
+                dst: SyncOperand::Remote(RemoteEndpoint::Tcp { addr, path }),
+                src: SyncOperand::Local(_),
+                ..
+            } => {
+                assert_eq!(addr, "backup:7878");
+                assert_eq!(path.as_deref(), Some("/archive/out"));
+            }
+            other => anyhow::bail!("expected TCP destination endpoint, got {other:?}"),
         }
 
         Ok(())

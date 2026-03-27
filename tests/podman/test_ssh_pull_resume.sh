@@ -52,7 +52,7 @@ $DOCKER run -d --name pxs-ssh-resume-server \
 echo "Waiting for SSH server to be ready..."
 sleep 2
 
-echo "Starting client and pulling with pre-existing oversized destination..."
+echo "Starting client and syncing with a pre-existing oversized destination..."
 $DOCKER run --name pxs-ssh-resume-client \
     -t \
     --network "$NETWORK" \
@@ -65,8 +65,7 @@ $DOCKER run --name pxs-ssh-resume-client \
              chmod 600 /root/.ssh/id_ed25519 && \
              echo -e 'Host pxs-ssh-resume-server\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/id_ed25519' > /root/.ssh/config && \
              chmod 600 /root/.ssh/config && \
-             pxs pull devops@pxs-ssh-resume-server:/srv/export/test.bin \
-             /data \
+             pxs sync /data/test.bin devops@pxs-ssh-resume-server:/srv/export/test.bin \
              -vv"
 
 if [ ! -f "$DEST_FILE" ]; then
@@ -84,4 +83,4 @@ if [ "$(stat -c %s "$DEST_FILE")" != "$SOURCE_SIZE" ]; then
     exit 1
 fi
 
-echo "✅ SSH pull resume test passed!"
+echo "✅ SSH sync resume test passed!"

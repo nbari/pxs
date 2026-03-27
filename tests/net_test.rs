@@ -907,6 +907,83 @@ async fn test_raw_tcp_push_truncates_existing_destination_for_empty_source() -> 
 }
 
 #[tokio::test]
+async fn test_raw_tcp_push_honors_exact_remote_file_path() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let src_file = dir.path().join("src.bin");
+    let dst_root = dir.path().join("dst");
+    std::fs::create_dir_all(&dst_root)?;
+    std::fs::write(&src_file, b"exact-target")?;
+
+    let (addr, receiver_handle) = spawn_receiver(dst_root.clone()).await?;
+    net::run_sender_with_features(
+        &addr.to_string(),
+        &src_file,
+        net::RemoteSyncOptions {
+            path: Some("/target.bin"),
+            threshold: 0.5,
+            features: net::RemoteFeatureOptions {
+                checksum: false,
+                delete: false,
+                fsync: false,
+            },
+            large_file_parallel: None,
+            ignores: &[],
+        },
+    )
+    .await?;
+    stop_receiver(receiver_handle).await;
+
+    assert_eq!(std::fs::read(dst_root.join("target.bin"))?, b"exact-target");
+    assert!(!dst_root.join("target.bin/src.bin").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_raw_tcp_pull_honors_exact_local_file_path() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let src_root = dir.path().join("src");
+    let dst_file = dir.path().join("local-copy.bin");
+    std::fs::create_dir_all(&src_root)?;
+    std::fs::write(src_root.join("remote.bin"), b"pulled-exact")?;
+
+    let probe = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = probe.local_addr()?;
+    drop(probe);
+
+    let addr_string = addr.to_string();
+    let src_root_clone = src_root.clone();
+    let listener_task = tokio::spawn(async move {
+        let ignores = Vec::new();
+        let _ = net::run_sender_listener(&addr_string, &src_root_clone, 0.5, false, &ignores).await;
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    net::run_pull_client_with_options(
+        &addr.to_string(),
+        &dst_file,
+        net::RemoteSyncOptions {
+            path: Some("/remote.bin"),
+            threshold: 0.5,
+            features: net::RemoteFeatureOptions {
+                checksum: false,
+                delete: false,
+                fsync: false,
+            },
+            large_file_parallel: None,
+            ignores: &[],
+        },
+    )
+    .await?;
+
+    listener_task.abort();
+    let _ = listener_task.await;
+
+    assert_eq!(std::fs::read(&dst_file)?, b"pulled-exact");
+    assert!(!dst_file.join("remote.bin").exists());
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_raw_tcp_large_file_parallel_uses_multiple_connections() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let src_file = dir.path().join("large.bin");
@@ -2370,7 +2447,7 @@ async fn test_run_sender_forwards_fsync_session_option_for_tcp_push() -> anyhow:
             .await
             .ok_or_else(|| anyhow::anyhow!("missing session options"))??;
         match net::deserialize_message(&session_options)? {
-            Message::SessionOptions { fsync, delete } => {
+            Message::SessionOptions { fsync, delete, .. } => {
                 assert!(fsync);
                 assert!(!delete);
             }

@@ -1,7 +1,10 @@
 use super::{
     BLOCK_SIZE, RemoteSyncOptions,
     codec::PxsCodec,
-    path::{ensure_expected_protocol_path, resolve_protocol_path, validate_protocol_path},
+    path::{
+        ensure_expected_protocol_path, resolve_protocol_path, resolve_requested_root,
+        validate_protocol_path,
+    },
     protocol::{
         Block, FileMetadata, Message, apply_file_metadata, deserialize_block_batch,
         deserialize_message, serialize_message,
@@ -37,6 +40,11 @@ struct PendingFile {
     file: Option<std::fs::File>,
     checksum: bool,
     parallel_transfer: Option<ParallelTransferRecord>,
+}
+
+struct SingleFileSession {
+    protocol_path: String,
+    target_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -101,7 +109,9 @@ struct ClientState {
     file_transfers: HashMap<String, FileTransferState>,
     progress: Option<Arc<ProgressBar>>,
     dir_metadata: Vec<(String, FileMetadata)>,
+    allow_root: PathBuf,
     dst_root: PathBuf,
+    single_file_session: Option<SingleFileSession>,
     transport: TransportFeatures,
     protocol_state: ProtocolState,
     session_fsync_override: Option<bool>,
@@ -137,7 +147,9 @@ impl ClientState {
             file_transfers: HashMap::new(),
             progress: None,
             dir_metadata: Vec::new(),
+            allow_root: dst_root.to_path_buf(),
             dst_root: dst_root.to_path_buf(),
+            single_file_session: None,
             transport: TransportFeatures::default(),
             protocol_state: ProtocolState::AwaitingHandshake,
             session_fsync_override: None,
@@ -185,9 +197,23 @@ impl ClientState {
 
     /// Clean up partial files on transfer failure.
     fn cleanup_partial_files(&mut self) {
+        let dst_root = self.dst_root.clone();
+        let single_file_target = self
+            .single_file_session
+            .as_ref()
+            .map(|session| (session.protocol_path.clone(), session.target_path.clone()));
         for (path, pending_file) in self.pending_files.drain() {
             if let Err(e) = cleanup_pending_file(pending_file)
-                && let Ok(full_path) = resolve_protocol_path(&self.dst_root, &path)
+                && let Ok(full_path) = if single_file_target
+                    .as_ref()
+                    .is_some_and(|(protocol_path, _)| protocol_path == &path)
+                {
+                    Ok(single_file_target
+                        .as_ref()
+                        .map_or_else(|| dst_root.clone(), |(_, target_path)| target_path.clone()))
+                } else {
+                    resolve_protocol_path(&dst_root, &path)
+                }
             {
                 eprintln!(
                     "Warning: failed to remove partial file {}: {e}",
@@ -274,12 +300,42 @@ impl ClientState {
             return Ok(record.id.clone());
         }
 
-        let record =
-            create_parallel_transfer_record(&self.dst_root, path, pending_file.staged_file.path())?;
+        let record = create_parallel_transfer_record(
+            &self.allow_root,
+            path,
+            pending_file.staged_file.path(),
+        )?;
         let transfer_id = record.id.clone();
         pending_file.parallel_transfer = Some(record);
         Ok(transfer_id)
     }
+
+    fn resolve_transfer_path(&self, path: &str) -> anyhow::Result<PathBuf> {
+        if let Some(single_file) = &self.single_file_session
+            && single_file.protocol_path == path
+        {
+            return Ok(single_file.target_path.clone());
+        }
+
+        resolve_protocol_path(&self.dst_root, path)
+    }
+}
+
+fn resolve_single_file_target(
+    allow_root: &Path,
+    requested_root: &Path,
+    file_name: &str,
+) -> anyhow::Result<PathBuf> {
+    validate_protocol_path(file_name)?;
+
+    let target_path = match std::fs::symlink_metadata(requested_root) {
+        Ok(meta) if meta.is_dir() => requested_root.join(file_name),
+        Ok(_) => requested_root.to_path_buf(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => requested_root.to_path_buf(),
+        Err(error) => return Err(error.into()),
+    };
+    tools::ensure_no_symlink_ancestors_under_root(allow_root, &target_path)?;
+    Ok(target_path)
 }
 
 fn validate_transfer_id(transfer_id: &str) -> anyhow::Result<()> {
@@ -409,6 +465,7 @@ pub async fn run_pull_client(addr: &str, dst_root: &Path, fsync: bool) -> anyhow
         addr,
         dst_root,
         RemoteSyncOptions {
+            path: None,
             threshold: 0.5,
             features: super::RemoteFeatureOptions {
                 checksum: false,
@@ -447,6 +504,7 @@ pub async fn run_pull_client_with_options(
     let mut state = perform_initial_handshake(&mut framed, dst_root, &client_options).await?;
     framed
         .send(serialize_message(&Message::PullRequest {
+            path: options.path.map(str::to_string),
             threshold: options.threshold,
             checksum: options.features.checksum,
             delete: options.features.delete,
@@ -750,13 +808,12 @@ async fn handle_sync_file<T>(
     metadata: FileMetadata,
     threshold: f32,
     checksum: bool,
-    dst_root: &Path,
 ) -> anyhow::Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     tracing::debug!("Syncing file: {path} ({} bytes)", metadata.size);
-    let full_path = resolve_protocol_path(dst_root, &path)?;
+    let full_path = state.resolve_transfer_path(&path)?;
     let progress = state.progress.clone();
     state.clear_transfer_state(&path);
 
@@ -879,7 +936,6 @@ async fn handle_sync_file_message<T>(
     metadata: FileMetadata,
     threshold: f32,
     checksum: bool,
-    dst_root: &Path,
 ) -> anyhow::Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
@@ -889,7 +945,7 @@ where
         progress.set_message(path.clone());
     }
 
-    handle_sync_file(framed, state, path, metadata, threshold, checksum, dst_root).await
+    handle_sync_file(framed, state, path, metadata, threshold, checksum).await
 }
 
 async fn request_full_copy_for_path<T>(
@@ -957,12 +1013,11 @@ async fn handle_block_hashes_message<T>(
     state: &mut ClientState,
     path: String,
     hashes: Vec<u64>,
-    dst_root: &Path,
 ) -> anyhow::Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    let full_path = resolve_protocol_path(dst_root, &path)?;
+    let full_path = state.resolve_transfer_path(&path)?;
     let transfer = state.transfer_state(&path)?;
     anyhow::ensure!(
         transfer.phase == TransferPhase::Hashes,
@@ -1063,6 +1118,8 @@ fn handle_session_options(
     remote_delete_override: RemoteDeleteOverride,
     fsync: bool,
     delete: bool,
+    path: Option<&str>,
+    single_file_name: Option<&str>,
 ) -> anyhow::Result<()> {
     if fsync {
         anyhow::ensure!(
@@ -1082,6 +1139,19 @@ fn handle_session_options(
     );
     if fsync {
         state.session_fsync_override = Some(fsync);
+    }
+    if let Some(path) = path {
+        state.dst_root = resolve_requested_root(&state.allow_root, path)?;
+    }
+    if let Some(single_file_name) = single_file_name {
+        let target_path =
+            resolve_single_file_target(&state.allow_root, &state.dst_root, single_file_name)?;
+        state.single_file_session = Some(SingleFileSession {
+            protocol_path: single_file_name.to_string(),
+            target_path,
+        });
+    } else {
+        state.single_file_session = None;
     }
     state.delete_mode = if delete {
         DeleteMode::Enabled
@@ -1115,7 +1185,6 @@ fn handle_parallel_transfer_config(
 async fn handle_sync_complete_message<T>(
     framed: &mut Framed<T, PxsCodec>,
     state: &mut ClientState,
-    dst_root: &Path,
     ignores: &[String],
     fsync: bool,
 ) -> anyhow::Result<bool>
@@ -1132,7 +1201,7 @@ where
         "received sync completion with {} active transfer state(s)",
         state.file_transfers.len()
     );
-    finalize_client_state(state, dst_root, ignores, fsync)?;
+    finalize_client_state(state, ignores, fsync)?;
     framed
         .send(serialize_message(&Message::SyncCompleteAck)?)
         .await?;
@@ -1168,13 +1237,21 @@ where
         };
     }
 
-    if let Message::SessionOptions { fsync, delete } = msg {
+    if let Message::SessionOptions {
+        fsync,
+        delete,
+        path,
+        single_file_name,
+    } = msg
+    {
         handle_session_options(
             state,
             options.remote_fsync_override,
             options.remote_delete_override,
             *fsync,
             *delete,
+            path.as_deref(),
+            single_file_name.as_deref(),
         )?;
         return Ok(Some(true));
     }
@@ -1198,7 +1275,6 @@ where
 async fn process_client_message<T>(
     framed: &mut Framed<T, PxsCodec>,
     state: &mut ClientState,
-    dst_root: &Path,
     options: &ClientHandlingOptions,
     msg: Message,
 ) -> anyhow::Result<bool>
@@ -1226,7 +1302,8 @@ where
         Message::SyncDir { path, metadata } => {
             state.source_paths.insert(path.clone());
             let effective_fsync = state.effective_fsync(options.fsync);
-            handle_sync_dir_message(state, dst_root, path, metadata, effective_fsync)?;
+            let dst_root = state.dst_root.clone();
+            handle_sync_dir_message(state, &dst_root, path, metadata, effective_fsync)?;
         }
         Message::SyncSymlink {
             path,
@@ -1235,7 +1312,8 @@ where
         } => {
             state.source_paths.insert(path.clone());
             let effective_fsync = state.effective_fsync(options.fsync);
-            handle_sync_symlink(path, target, metadata, dst_root, effective_fsync).await?;
+            let dst_root = state.dst_root.clone();
+            handle_sync_symlink(path, target, metadata, &dst_root, effective_fsync).await?;
         }
         Message::SyncFile {
             path,
@@ -1244,11 +1322,10 @@ where
             checksum,
         } => {
             state.source_paths.insert(path.clone());
-            handle_sync_file_message(framed, state, path, metadata, threshold, checksum, dst_root)
-                .await?;
+            handle_sync_file_message(framed, state, path, metadata, threshold, checksum).await?;
         }
         Message::BlockHashes { path, hashes } => {
-            handle_block_hashes_message(framed, state, path, hashes, dst_root).await?;
+            handle_block_hashes_message(framed, state, path, hashes).await?;
         }
         Message::ApplyBlocks { path, blocks } => {
             handle_apply_blocks_message(state, &path, blocks)?;
@@ -1264,11 +1341,11 @@ where
         }
         Message::ApplyMetadata { path, metadata } => {
             let effective_fsync = state.effective_fsync(options.fsync);
-            handle_apply_metadata(framed, state, path, metadata, dst_root, effective_fsync).await?;
+            handle_apply_metadata(framed, state, path, metadata, effective_fsync).await?;
         }
         Message::VerifyChecksum { path, hash } => {
             let effective_fsync = state.effective_fsync(options.fsync);
-            handle_verify_checksum(framed, state, &path, &hash, dst_root, effective_fsync).await?;
+            handle_verify_checksum(framed, state, &path, &hash, effective_fsync).await?;
         }
         Message::EndOfFile { path } => {
             handle_end_of_file_message(state, &path)?;
@@ -1278,7 +1355,6 @@ where
             return handle_sync_complete_message(
                 framed,
                 state,
-                dst_root,
                 options.ignores.as_ref(),
                 effective_fsync,
             )
@@ -1413,7 +1489,6 @@ fn delete_extraneous_destination_entries(
 
 fn finalize_client_state(
     state: &mut ClientState,
-    dst_root: &Path,
     ignores: &[String],
     fsync: bool,
 ) -> anyhow::Result<()> {
@@ -1422,9 +1497,18 @@ fn finalize_client_state(
     }
 
     if state.delete_enabled() {
-        delete_extraneous_destination_entries(dst_root, &state.source_paths, ignores, fsync)?;
+        delete_extraneous_destination_entries(
+            &state.dst_root,
+            &state.source_paths,
+            ignores,
+            fsync,
+        )?;
     }
-    finalize_directory_metadata(dst_root, std::mem::take(&mut state.dir_metadata), fsync)?;
+    finalize_directory_metadata(
+        &state.dst_root,
+        std::mem::take(&mut state.dir_metadata),
+        fsync,
+    )?;
     if let Some(progress) = state.progress.take() {
         progress.finish_with_message("Done");
     }
@@ -1541,8 +1625,7 @@ where
             handle_attached_chunk_writer_start(framed, dst_root, transfer_id, path).await?;
             return Ok(());
         }
-        let should_continue =
-            process_client_message(framed, state, dst_root, &options, msg).await?;
+        let should_continue = process_client_message(framed, state, &options, msg).await?;
         if !should_continue {
             return Ok(());
         }
@@ -1567,7 +1650,6 @@ where
 
     finalize_client_state(
         state,
-        dst_root,
         options.ignores.as_ref(),
         state.effective_fsync(options.fsync),
     )?;
@@ -1607,13 +1689,12 @@ async fn handle_apply_metadata<T>(
     state: &mut ClientState,
     path: String,
     metadata: FileMetadata,
-    dst_root: &Path,
     fsync: bool,
 ) -> anyhow::Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    let full_path = resolve_protocol_path(dst_root, &path)?;
+    let full_path = state.resolve_transfer_path(&path)?;
     let transfer = state.transfer_state(&path)?;
     if let Some(pending_file) = state.pending_files.get_mut(&path) {
         anyhow::ensure!(
@@ -1699,13 +1780,12 @@ async fn handle_verify_checksum<T>(
     state: &mut ClientState,
     path: &str,
     expected_hash: &[u8; 32],
-    dst_root: &Path,
     fsync: bool,
 ) -> anyhow::Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    let full_path = resolve_protocol_path(dst_root, path)?;
+    let full_path = state.resolve_transfer_path(path)?;
     let transfer = state.transfer_state(path)?;
     anyhow::ensure!(
         transfer.phase == TransferPhase::Checksum,

@@ -31,6 +31,7 @@ pub struct LargeFileParallelOptions {
 /// Options shared by SSH sender/receiver flows.
 #[derive(Clone, Copy, Debug)]
 pub struct RemoteSyncOptions<'a> {
+    pub path: Option<&'a str>,
     pub threshold: f32,
     pub features: RemoteFeatureOptions,
     pub large_file_parallel: Option<LargeFileParallelOptions>,

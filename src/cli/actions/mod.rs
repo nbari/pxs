@@ -11,11 +11,11 @@ pub enum SyncOperand {
     Remote(RemoteEndpoint),
 }
 
-/// Remote endpoint selected by a public push or pull command.
+/// Remote endpoint selected by the unified public sync CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteEndpoint {
-    /// Raw TCP endpoint such as `host:port`.
-    Tcp(String),
+    /// Raw TCP endpoint such as `host:port` or `host:port/path`.
+    Tcp { addr: String, path: Option<String> },
     /// SSH endpoint such as `user@host:/path`.
     Ssh { host: String, path: String },
     /// Standard input/output transport for advanced piping.
@@ -39,14 +39,14 @@ pub enum Action {
         ignores: Vec<String>,
         quiet: bool,
     },
-    /// Listen for incoming push operations and write them into `dst`.
+    /// Listen for incoming sync operations and write them into `dst`.
     Listen {
         addr: String,
         dst: PathBuf,
         fsync: bool,
         quiet: bool,
     },
-    /// Serve `src` to remote pull clients.
+    /// Serve `src` to remote sync clients.
     Serve {
         addr: String,
         src: PathBuf,

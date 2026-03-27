@@ -16,15 +16,15 @@ const LONG_ABOUT: &str = "pxs is a file synchronization tool for the same broad 
     transport to speed up repeated synchronization when those choices help.\n\n\
     EXAMPLES:\n\n\
     1. Local Sync (File or Directory):\n\
-       pxs sync /data/old /data/new\n\n\
+       pxs sync /data/new /data/old\n\n\
     2. SSH Sync:\n\
-       pxs sync /data/old user@db2:/data/new\n\n\
+       pxs sync /data/new user@db2:/data/old\n\n\
     3. Network Sync - Receiver (Server 2):\n\
-       pxs listen 0.0.0.0:8080 /new/pgdata\n\n\
+       pxs listen 0.0.0.0:8080 /\n\n\
     4. Raw TCP Sync:\n\
-       pxs sync /old/pgdata 192.168.1.10:8080\n\n\
+       pxs sync /new/pgdata 192.168.1.10:8080/old/pgdata\n\n\
     5. Force Content Verification (Checksum):\n\
-       pxs sync file.bin copy.bin --checksum\n\n\
+       pxs sync copy.bin file.bin --checksum\n\n\
     SUPPORTED PLATFORMS:\n\
        Linux, macOS, and BSD.\n\
        Windows is not supported.";
@@ -34,8 +34,8 @@ const THRESHOLD_LONG_HELP: &str = "Value between 0.1 and 1.0. If the destination
 const CHECKSUM_LONG_HELP: &str = "By default, pxs skips files if size and modification time match. Use this to force a block-by-block hash comparison. In network mode, pxs also performs end-to-end BLAKE3 verification after the transfer completes.";
 const FSYNC_LONG_HELP: &str =
     "Ensures that file data and metadata are flushed to disk before finishing. Slower but safer.";
-const LARGE_FILE_PARALLEL_THRESHOLD_LONG_HELP: &str = "Enable remote push chunk-parallel transfer for files at or above this size when the transport supports it. Accepts raw bytes or binary suffixes such as KiB, MiB, GiB, and TiB. Use 0 to disable.";
-const LARGE_FILE_PARALLEL_WORKERS_LONG_HELP: &str = "Number of parallel worker connections or sessions for eligible remote large files. If omitted, pxs chooses a conservative default from available CPU cores.";
+const LARGE_FILE_PARALLEL_THRESHOLD_LONG_HELP: &str = "Enable SSH chunk-parallel transfer for files at or above this size when the source is local and the destination is remote. Accepts raw bytes or binary suffixes such as KiB, MiB, GiB, and TiB. Use 0 to disable.";
+const LARGE_FILE_PARALLEL_WORKERS_LONG_HELP: &str = "Number of parallel worker connections or sessions for eligible large outbound SSH transfers. If omitted, pxs chooses a conservative default from available CPU cores.";
 
 /// Create a path validator that requires the path to exist.
 pub fn validator_path_exists() -> ValueParser {
@@ -199,7 +199,7 @@ fn fsync_arg(hidden: bool) -> Arg {
 fn large_file_parallel_threshold_arg() -> Arg {
     Arg::new("large_file_parallel_threshold")
         .long("large-file-parallel-threshold")
-        .help("Enable remote push chunk-parallel transfer at or above SIZE")
+        .help("Enable outbound SSH chunk-parallel transfer at or above SIZE")
         .long_help(LARGE_FILE_PARALLEL_THRESHOLD_LONG_HELP)
         .value_name("SIZE")
         .value_parser(size_bytes_parser())
@@ -209,7 +209,7 @@ fn large_file_parallel_threshold_arg() -> Arg {
 fn large_file_parallel_workers_arg() -> Arg {
     Arg::new("large_file_parallel_workers")
         .long("large-file-parallel-workers")
-        .help("Set the number of worker sessions/connections for large-file push")
+        .help("Set the number of worker sessions/connections for large outbound SSH transfers")
         .long_help(LARGE_FILE_PARALLEL_WORKERS_LONG_HELP)
         .value_name("N")
         .value_parser(positive_usize_parser())
@@ -275,7 +275,7 @@ fn dst_arg() -> Arg {
 
 fn endpoint_arg() -> Arg {
     Arg::new("endpoint")
-        .help("Remote endpoint as host:port, user@host:/path, or - for stdio")
+        .help("Remote endpoint as host:port[/path], user@host:/path, or - for stdio")
         .value_name("ENDPOINT")
         .required(true)
 }
@@ -337,10 +337,10 @@ fn internal_stdio_args() -> [Arg; 13] {
 
 fn sync_command() -> Command {
     Command::new("sync")
-        .about("Synchronize between local paths, SSH endpoints, or raw TCP listeners/servers")
+        .about("Synchronize into DEST from SRC across local paths, SSH endpoints, or raw TCP")
         .args([
-            sync_operand_arg("src", "Source path or remote endpoint", "SRC"),
             sync_operand_arg("dst", "Destination path or remote endpoint", "DST"),
+            sync_operand_arg("src", "Source path or remote endpoint", "SRC"),
             threshold_arg(false),
             checksum_arg(false),
             fsync_arg(false),
@@ -356,6 +356,7 @@ fn sync_command() -> Command {
 fn push_command() -> Command {
     Command::new("push")
         .about("Push a local source to a remote receiver or SSH destination")
+        .hide(true)
         .args([
             src_arg(),
             endpoint_arg(),
@@ -373,6 +374,7 @@ fn push_command() -> Command {
 fn pull_command() -> Command {
     Command::new("pull")
         .about("Pull from a remote serve endpoint or SSH source into a local destination")
+        .hide(true)
         .args([
             endpoint_arg(),
             dst_arg(),
@@ -387,13 +389,13 @@ fn pull_command() -> Command {
 
 fn listen_command() -> Command {
     Command::new("listen")
-        .about("Listen for incoming push operations and write them to a destination")
+        .about("Listen for incoming sync operations and write them to a destination root")
         .args([addr_arg(), dst_arg(), fsync_arg(false)])
 }
 
 fn serve_command() -> Command {
     Command::new("serve")
-        .about("Serve a local source for remote pull clients")
+        .about("Serve a local source root for remote sync clients")
         .args([
             addr_arg(),
             src_arg(),
@@ -445,7 +447,7 @@ mod tests {
         std::fs::write(&src, "content")?;
         let src_arg = src.to_string_lossy().to_string();
         let dst_arg = dst.to_string_lossy().to_string();
-        let matches = new().try_get_matches_from(["pxs", "sync", &src_arg, &dst_arg, "-vvv"])?;
+        let matches = new().try_get_matches_from(["pxs", "sync", &dst_arg, &src_arg, "-vvv"])?;
         assert_eq!(matches.get_count("verbose"), 3);
         Ok(())
     }
@@ -460,11 +462,11 @@ mod tests {
         let dst_arg = dst.to_string_lossy().to_string();
 
         let too_small =
-            new().try_get_matches_from(["pxs", "sync", &src_arg, &dst_arg, "--threshold", "0.01"]);
+            new().try_get_matches_from(["pxs", "sync", &dst_arg, &src_arg, "--threshold", "0.01"]);
         assert!(too_small.is_err());
 
         let too_large =
-            new().try_get_matches_from(["pxs", "sync", &src_arg, &dst_arg, "--threshold", "1.5"]);
+            new().try_get_matches_from(["pxs", "sync", &dst_arg, &src_arg, "--threshold", "1.5"]);
         assert!(too_large.is_err());
         Ok(())
     }
@@ -477,7 +479,8 @@ mod tests {
         assert!(!help.contains("--stdio"));
         assert!(!help.contains("--source"));
         assert!(help.contains("sync"));
-        assert!(help.contains("push"));
+        assert!(!help.contains("\npush"));
+        assert!(!help.contains("\npull"));
         Ok(())
     }
 

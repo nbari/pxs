@@ -75,8 +75,11 @@ pub enum Message {
     SessionOptions {
         fsync: bool,
         delete: bool,
+        path: Option<String>,
+        single_file_name: Option<String>,
     },
     PullRequest {
+        path: Option<String>,
         threshold: f32,
         checksum: bool,
         delete: bool,

@@ -37,6 +37,12 @@ pub(crate) fn resolve_protocol_path(root: &Path, path: &str) -> anyhow::Result<P
     Ok(full_path)
 }
 
+pub(crate) fn resolve_requested_root(root: &Path, requested: &str) -> anyhow::Result<PathBuf> {
+    let relative = requested.trim_start_matches('/');
+    validate_protocol_path(relative)?;
+    resolve_protocol_path(root, relative)
+}
+
 pub(crate) fn ensure_expected_protocol_path(expected: &str, received: &str) -> anyhow::Result<()> {
     validate_protocol_path(received)?;
     anyhow::ensure!(

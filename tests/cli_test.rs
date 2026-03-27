@@ -95,8 +95,8 @@ fn test_verbose_flag_enables_debug_output() -> anyhow::Result<()> {
     let src_arg = src.to_string_lossy().to_string();
     let dst_arg = dst.to_string_lossy().to_string();
 
-    let base = run_pxs(&["sync", &src_arg, &dst_arg])?;
-    let verbose = run_pxs(&["-vv", "sync", &src_arg, &dst_arg])?;
+    let base = run_pxs(&["sync", &dst_arg, &src_arg])?;
+    let verbose = run_pxs(&["-vv", "sync", &dst_arg, &src_arg])?;
 
     assert!(!stderr_text(&base).contains("Dispatching action:"));
     assert!(stderr_text(&verbose).contains("Dispatching action:"));

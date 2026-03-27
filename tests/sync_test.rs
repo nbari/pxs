@@ -398,8 +398,8 @@ async fn test_sync_subcommand_with_checksum_updates_matching_metadata_file() -> 
 
     let output = Command::new(env!("CARGO_BIN_EXE_pxs"))
         .arg("sync")
-        .arg(&src_path)
         .arg(&dst_path)
+        .arg(&src_path)
         .arg("--checksum")
         .arg("--quiet")
         .output()?;

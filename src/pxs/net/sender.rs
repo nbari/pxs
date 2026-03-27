@@ -1,7 +1,7 @@
 use super::{
     BLOCK_SIZE, BLOCK_SIZE_USIZE, LargeFileParallelOptions, RemoteSyncOptions,
     codec::PxsCodec,
-    path::{ensure_expected_protocol_path, relative_protocol_path},
+    path::{ensure_expected_protocol_path, relative_protocol_path, resolve_requested_root},
     protocol::{
         Block, FileMetadata, Message, deserialize_message, serialize_block_batch, serialize_message,
     },
@@ -27,10 +27,11 @@ use tokio_util::codec::Framed;
 
 const MIN_COMPRESSED_BATCH_BYTES: u64 = 64 * 1024;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct SessionOptionFlags {
     fsync: bool,
     delete: bool,
+    path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -63,6 +64,7 @@ struct ServeRequestDefaults {
 }
 
 struct PullRequestOptions {
+    path: Option<String>,
     threshold: f32,
     checksum: bool,
     delete: bool,
@@ -112,6 +114,7 @@ pub async fn run_sender_listener(
 
 fn default_pull_request(defaults: &ServeRequestDefaults) -> PullRequestOptions {
     PullRequestOptions {
+        path: None,
         threshold: defaults.threshold,
         checksum: defaults.checksum,
         delete: false,
@@ -131,11 +134,13 @@ where
     };
     match deserialize_message(&bytes)? {
         Message::PullRequest {
+            path,
             threshold,
             checksum,
             delete,
             ignores,
         } => Ok(PullRequestOptions {
+            path,
             threshold,
             checksum,
             delete,
@@ -165,23 +170,29 @@ where
 {
     let features = sender_handshake(framed, true, false).await?;
     let request = receive_pull_request(framed, &defaults).await?;
+    let src_root = if let Some(path) = &request.path {
+        resolve_requested_root(src_root, path)?
+    } else {
+        src_root.to_path_buf()
+    };
     anyhow::ensure!(
         !request.delete || src_root.is_dir(),
         "--delete is only supported when syncing directories"
     );
     let _control_session = acquire_control_session(&control_session_gate)?;
-    let (tasks, total_size) = collect_sync_tasks(src_root, request.ignores.as_ref()).await?;
+    let (tasks, total_size) = collect_sync_tasks(&src_root, request.ignores.as_ref()).await?;
     let progress = Arc::new(tools::create_progress_bar(total_size));
 
     sender_transfer_loop(
         framed,
-        src_root,
+        &src_root,
         SenderLoopOptions {
             threshold: request.threshold,
             checksum: request.checksum,
             session: SessionOptionFlags {
                 fsync: false,
                 delete: request.delete,
+                path: None,
             },
             allow_lz4: true,
             large_file_parallel: None,
@@ -227,6 +238,7 @@ pub async fn run_sender_with_options(
         addr,
         src_root,
         RemoteSyncOptions {
+            path: None,
             threshold,
             features: super::RemoteFeatureOptions {
                 checksum,
@@ -279,6 +291,7 @@ pub async fn run_sender_with_features(
             session: SessionOptionFlags {
                 fsync: options.features.fsync,
                 delete: options.features.delete,
+                path: options.path.map(str::to_string),
             },
             allow_lz4: true,
             large_file_parallel,
@@ -327,6 +340,7 @@ pub async fn run_stdio_sender(
             session: SessionOptionFlags {
                 fsync: false,
                 delete,
+                path: None,
             },
             allow_lz4: false,
             large_file_parallel: None,
@@ -365,6 +379,7 @@ pub async fn run_ssh_sender(
             session: SessionOptionFlags {
                 fsync: false,
                 delete: options.features.delete,
+                path: None,
             },
             allow_lz4: false,
             large_file_parallel: options.large_file_parallel.map(
@@ -418,11 +433,13 @@ async fn send_push_session_options<T>(
     framed: &mut Framed<T, PxsCodec>,
     fsync: bool,
     delete: bool,
+    path: Option<&str>,
+    single_file_name: Option<String>,
 ) -> anyhow::Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    if !fsync && !delete {
+    if !fsync && !delete && path.is_none() && single_file_name.is_none() {
         return Ok(());
     }
 
@@ -430,9 +447,22 @@ where
         .send(serialize_message(&Message::SessionOptions {
             fsync,
             delete,
+            path: path.map(str::to_string),
+            single_file_name,
         })?)
         .await?;
     Ok(())
+}
+
+fn session_single_file_name(src_root: &Path) -> anyhow::Result<Option<String>> {
+    if !src_root.is_file() {
+        return Ok(None);
+    }
+
+    src_root
+        .file_name()
+        .map(|name| Some(name.to_string_lossy().into_owned()))
+        .ok_or_else(|| anyhow::anyhow!("source file has no name: {}", src_root.display()))
 }
 
 async fn send_parallel_transfer_config<T>(
@@ -507,7 +537,15 @@ async fn sender_transfer_loop<T>(
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    send_push_session_options(framed, options.session.fsync, options.session.delete).await?;
+    let single_file_name = session_single_file_name(src_root)?;
+    send_push_session_options(
+        framed,
+        options.session.fsync,
+        options.session.delete,
+        options.session.path.as_deref(),
+        single_file_name,
+    )
+    .await?;
     send_parallel_transfer_config(framed, options.large_file_parallel.clone(), features).await?;
 
     framed

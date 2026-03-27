@@ -24,8 +24,8 @@ data synchronization for workloads where those choices help.
 *   **Multi-threaded Engine**: Parallelizes file walking, block-level hashing, and I/O operations.
 *   **Fixed-Block Synchronization**: Uses **128KB** chunks and **XxHash64** for ultra-fast delta analysis.
 *   **High-Throughput TCP Transport**: Uses a compact binary protocol with **rkyv** serialization over raw TCP.
-*   **Auto-SSH Mode**: Seamlessly tunnels through SSH for secure transfers without manual port forwarding.
-*   **Pull Mode**: Supports both pushing to and pulling from remote servers.
+*   **Unified `sync` CLI**: Uses one public `pxs sync DEST SRC` command shape for local, SSH, and raw TCP flows.
+*   **Auto-SSH Mode**: Tunnels through SSH when one side is an `user@host:/path` endpoint.
 *   **Staged Atomic Writes**: Preserves an existing destination until the replacement file is fully written and ready to commit.
 *   **Smart Skipping**: Automatically skips unchanged files based on size and modification time.
 
@@ -110,11 +110,11 @@ flowchart LR
     CLI[Local pxs CLI] --> CTRL[SSH control session]
     CTRL <-->|pxs protocol over stdio| REMOTE[Remote pxs --stdio receiver]
     REMOTE --> DST[Destination path]
-    CTRL -. large SSH push files .-> WORKERS[SSH chunk-writer sessions]
+    CTRL -. eligible large SSH outbound files .-> WORKERS[SSH chunk-writer sessions]
     WORKERS -->|transfer-id bound block writes| REMOTE
 ```
 
-For normal SSH transfers, `pxs` uses a single control session. For eligible large-file SSH `push` operations, that control session can spawn additional chunk-writer SSH workers while final metadata, checksum, delete finalization, and completion acknowledgment stay on the control path.
+For normal SSH transfers, `pxs` uses a single control session. For eligible large-file SSH transfers where the source is local and the destination is remote, that control session can spawn additional chunk-writer SSH workers while final metadata, checksum, delete finalization, and completion acknowledgment stay on the control path.
 
 ### Delta Sync Algorithm
 
@@ -140,180 +140,118 @@ flowchart TD
 
 ## Usage
 
-### `sync`
-Use this when both source and destination are local paths on the same machine.
-`sync` is the default local data-mover: it compares an existing destination and only rewrites changed blocks when delta sync is worthwhile.
-
-Typical use:
-- local file or directory refresh
-- repeated sync of a local `PGDATA` copy
-- local copy where you still want `pxs` block-level behavior instead of `cp`
-
-Examples:
+The public sync model is:
 
 ```bash
-# Synchronize a single file
-pxs sync file.bin backup.bin
+pxs sync DEST SRC
+```
 
-# Synchronize a directory
-pxs sync /path/to/source_dir /path/to/dest_dir
+The first operand is always the destination. The second operand is always the source.
+
+`DEST` and `SRC` can be:
+- local filesystem paths
+- SSH endpoints like `user@host:/path`
+- raw TCP endpoints like `host:port/path`
+
+Examples for each transport:
+
+```bash
+# Local: file -> file
+pxs sync backup.bin file.bin
+
+# Local: directory -> directory
+pxs sync /path/to/dest_dir /path/to/source_dir
+
+# SSH: remote file -> local file
+pxs sync ./local_file.bin user@remote-server:/path/to/remote/file.bin
+
+# SSH: local file -> remote file
+pxs sync user@remote-server:/path/to/dest/file.bin ./file.bin
+
+# SSH: remote directory -> local directory
+pxs sync /srv/restore/data user@remote-server:/srv/export/data
+
+# SSH: local directory -> remote directory
+pxs sync user@remote-server:/srv/incoming/data /var/lib/postgresql/data
+
+# Raw TCP: remote file -> local file
+pxs sync ./snapshot.bin 192.168.1.10:8080/snapshot.bin
+
+# Raw TCP: local file -> remote file
+pxs sync 192.168.1.10:8080/incoming/snapshot.bin ./snapshot.bin
+
+# Raw TCP: remote directory -> local directory
+pxs sync /srv/restore/data 192.168.1.10:8080/pgdata
+
+# Raw TCP: local directory -> remote directory
+pxs sync 192.168.1.10:8080/incoming/pgdata /var/lib/postgresql/data
 
 # Force checksum-based verification
-pxs sync ./dataset.bin /mnt/backup/dataset.bin --checksum
+pxs sync /mnt/backup/dataset.bin ./dataset.bin --checksum
 
-# Flush file data to disk before completion
-pxs sync ./dataset.bin /mnt/backup/dataset.bin --fsync
-```
-
-### `push`
-Use this when the data starts on the local machine and you want to send it somewhere else.
-`push` pairs with `listen` for raw TCP transfers, or it can target an SSH endpoint directly.
-
-Typical use:
-- send local data to a remote receiver over raw TCP
-- push directly to a remote path over SSH
-- mirror a remote directory over SSH with `--delete`
-- benchmark sender-side transfer performance
-
-Examples:
-
-```bash
-# Push one file to a raw TCP receiver
-pxs push ./archive.tar 192.168.1.10:8080
-
-# Push a directory tree to a raw TCP receiver
-pxs push /var/lib/postgresql/data 192.168.1.10:8080
-
-# Push one file over SSH
-pxs push ./backup.tar.zst db2@example.net:/srv/backups/backup.tar.zst
-
-# Push a directory tree over SSH
-pxs push /var/lib/postgresql/data db2@example.net:/srv/replica/data
-
-# Mirror a remote directory over SSH
-pxs push /var/lib/postgresql/data db2@example.net:/srv/replica/data --delete --fsync
-
-# Speed-first benchmark pass for PGDATA over SSH
-pxs push /var/lib/postgresql/data db2@example.net:/srv/replica/data --delete
-```
-
-### `pull`
-Use this when the data should end up on the local machine.
-`pull` pairs with `serve` for raw TCP transfers, or it can fetch directly from an SSH endpoint.
-
-Typical use:
-- fetch data from a remote source into a local directory
-- pull a remote snapshot or `PGDATA` tree over SSH
-- mirror a local destination from an SSH source with `--delete`
-- run the receiving side locally while the remote side exposes data
-
-Examples:
-
-```bash
-# Pull from a raw TCP serve endpoint
-pxs pull 192.168.1.10:8080 ./snapshot.bin
-
-# Pull one file over SSH
-pxs pull db1@example.net:/srv/export/base.tar.zst ./base.tar.zst
-
-# Pull a directory tree over SSH
-pxs pull db1@example.net:/var/lib/postgresql/data /srv/restore/data
-
-# Mirror a local directory from an SSH source
-pxs pull db1@example.net:/srv/export/pgdata /srv/restore/pgdata --delete --fsync
-```
-
-For raw TCP endpoints, source-side options such as `--checksum`, `--threshold`, and `--ignore` belong on `serve`. For SSH endpoints, `pull` can pass those options through to the remote helper.
-Remote mirror deletion with `--delete` is currently supported for SSH `push` and `pull`. Raw TCP and manual stdio public flows reject `--delete`.
-
-### `listen`
-Use this when this machine should receive incoming `push` operations.
-`listen` owns the destination path and waits for another host to push data into it.
-
-Typical use:
-- prepare a destination host for an incoming raw TCP push
-- expose a durable receiving endpoint with `--fsync`
-
-Examples:
-
-```bash
-# Receive files into /srv/incoming
-pxs listen 0.0.0.0:8080 /srv/incoming
-
-# Receive into /new/data and fsync committed files
-pxs listen 0.0.0.0:8080 /new/data --fsync
+# Flush committed data before completion
+pxs sync /mnt/backup/dataset.bin ./dataset.bin --fsync
 ```
 
 > [!IMPORTANT]
-> `listen` rejects destination roots that are symlinks, and it rejects incoming writes whose destination parent path would traverse a symlink under the configured root.
+> The built-in SSH transport is designed for non-interactive authentication. In practice, that means SSH keys, `ssh-agent`, or an already-established multiplexed SSH session. Interactive password prompts are not a supported workflow for `pxs sync` with SSH endpoints.
 
-### `serve`
-Use this when this machine should expose a source tree for remote `pull` clients.
-`serve` is the mirror image of `listen`: it owns the source path and waits for another host to pull from it.
+### Raw TCP Setup
+Raw TCP still needs a service process on the remote side. `sync` is the client-facing transfer command; `listen` and `serve` are the server-side setup commands.
 
-Typical use:
-- serve a local snapshot over raw TCP
-- keep source-side filtering or checksum policy on the source host
-
-Examples:
+#### `listen`
+Use this on the receiving host to expose an allowed destination root for incoming raw TCP sync sessions.
 
 ```bash
-# Serve one file for remote pull clients
-pxs serve 0.0.0.0:8080 /srv/export/snapshot.bin
+# Expose /srv as the allowed destination root
+pxs listen 0.0.0.0:8080 /srv
 
-# Serve a directory tree with checksum verification enabled
-pxs serve 0.0.0.0:8080 /srv/export/pgdata --checksum
+# Same, but durably fsync committed changes
+pxs listen 0.0.0.0:8080 /srv --fsync
 ```
 
-### Raw TCP Command Pairs
-Use these pairings for direct TCP flows on trusted networks:
+Then the sending side targets a path inside that root:
 
 ```bash
-# Remote host receives an incoming push
-pxs listen 0.0.0.0:8080 /srv/incoming
-# Local host sends data to it
-pxs push /var/lib/postgresql/data 192.168.1.10:8080
+pxs sync 192.168.1.10:8080/incoming/snapshot.bin ./snapshot.bin
+pxs sync 192.168.1.10:8080/incoming/pgdata /var/lib/postgresql/data
 ```
-
-```bash
-# Remote host exposes data for pull clients
-pxs serve 0.0.0.0:8080 /srv/export/snapshot.bin
-# Local host pulls it down
-pxs pull 192.168.1.10:8080 ./snapshot.bin
-```
-
-### SSH Command Pairs
-Use these when you want `pxs` to manage the SSH tunnel automatically:
 
 > [!IMPORTANT]
-> The built-in SSH transport is designed for non-interactive authentication. In practice, that means SSH keys, `ssh-agent`, or an already-established multiplexed SSH session. Interactive password prompts are not a supported workflow for `pxs push` / `pxs pull` over SSH.
+> `listen` rejects symlinked roots, and requested raw TCP destination paths are resolved beneath the configured root with the same symlink-safety checks used by local and SSH sync.
+
+#### `serve`
+Use this on the source host to expose an allowed source root for incoming raw TCP sync sessions.
 
 ```bash
-# Push local data to a remote path over SSH
-pxs push my_file.bin user@remote-server:/path/to/dest/my_file.bin
+# Expose /srv/export as the allowed source root
+pxs serve 0.0.0.0:8080 /srv/export
 
-# Pull remote data into a local path over SSH
-pxs pull user@remote-server:/path/to/remote/file.bin ./local_file.bin
+# Keep checksum policy on the source host
+pxs serve 0.0.0.0:8080 /srv/export --checksum
 ```
 
-### Manual SSH (using stdio pipe)
-If you need custom SSH flags, you can still use the internal `--stdio` transport manually:
+Then the client selects a path inside that root:
 
 ```bash
-ssh user@remote-server "pxs --stdio --quiet --destination /path/to/new/data" < <(pxs push /path/to/old/data -)
+pxs sync ./snapshot.bin 192.168.1.10:8080/snapshots/base.tar.zst
+pxs sync /srv/restore/data 192.168.1.10:8080/pgdata --checksum
 ```
 
-If you cannot use SSH keys, authenticate with plain `ssh` first or use SSH multiplexing outside `pxs`, then run the transfer over that existing SSH setup.
+For raw TCP endpoints, source-side options such as `--checksum`, `--threshold`, and `--ignore` still belong on `serve`. The path in `host:port/path` selects what to read or write within the configured `serve` or `listen` root.
+
+### Legacy Aliases
+`push` and `pull` still exist as hidden compatibility aliases, but the public CLI and README now standardize on `pxs sync DEST SRC`.
 
 ## PGDATA Migration Script
 
-This repository includes [`sync.sh`](./sync.sh), a PostgreSQL-focused migration helper built around repeated `pxs push` passes over SSH.
+This repository includes [`sync.sh`](./sync.sh), a PostgreSQL-focused migration helper built around repeated `pxs sync DEST SRC` passes over SSH.
 
 - Run it from the source host where `PGDATA` lives.
-- It opens a local `psql` session, calls `pg_backup_start(...)`, performs repeated SSH push passes, calls `pg_backup_stop()`, and installs the resulting `backup_label` on the destination.
+- It opens a local `psql` session, calls `pg_backup_start(...)`, performs repeated SSH sync passes, calls `pg_backup_stop()`, and installs the resulting `backup_label` on the destination.
 - Local `PGDATA` files are not modified by the script, but the local PostgreSQL instance does temporarily enter and exit backup mode.
 - Filesystem mutations happen on the remote destination: directory creation, file replacement, mirror cleanup via `--delete`, and `backup_label` installation.
-- The bundled script is currently speed-first: it runs all `pxs push` passes with `--delete` and without `--fsync` so you can benchmark raw transfer speed first.
+- The bundled script is currently speed-first: it runs all `pxs sync` passes with `--delete` and without `--fsync` so you can benchmark raw transfer speed first.
 - The script assumes the remote SSH session already runs as the intended PostgreSQL OS user or otherwise writes with the correct ownership for the destination cluster.
 
 > [!IMPORTANT]
@@ -326,7 +264,7 @@ This repository includes [`sync.sh`](./sync.sh), a PostgreSQL-focused migration 
 - Leaf symlink entries inside the destination tree are handled as entries: they can be replaced or removed without following their targets.
 - Replacement paths are staged to preserve an existing destination until the new object is ready to commit, including cross-type replacements such as file-to-directory and directory-to-symlink.
 - `--fsync` now covers committed file writes, directory installs, symlink installs, and final directory metadata application.
-- SSH `push --delete` and `pull --delete` now perform receiver-side mirror cleanup before completion is acknowledged.
+- SSH `sync --delete` performs receiver-side mirror cleanup before completion is acknowledged.
 - Local `sync --delete` removes extra entries safely, including leaf symlinks, but its deletions are not yet crash-durable under `--fsync`.
 - PostgreSQL tablespaces under `pg_tblspc` are preserved as symlinks. The destination must already provide valid tablespace targets.
 
@@ -334,15 +272,15 @@ This repository includes [`sync.sh`](./sync.sh), a PostgreSQL-focused migration 
 
 *   **`--quiet` (-q)**: Suppress all progress bars and status messages.
 *   **`--checksum` (-c)**: Force a block-by-block hash comparison even if size/mtime match.
-*   **`--delete`**: Remove destination entries that are not present in the source tree. Supported for local `sync` and SSH `push`/`pull`. Raw TCP and public stdio flows currently reject it.
-*   **`--fsync` (-f)**: Force durable sync of committed file writes plus directory/symlink installs and final directory metadata. For SSH `push`/`pull --delete`, completion waits for delete finalization. Local `sync --delete` deletions are not yet crash-durable.
+*   **`--delete`**: Remove destination entries that are not present in the source tree. Supported for local `sync` and SSH `sync`. Raw TCP and public stdio flows currently reject it.
+*   **`--fsync` (-f)**: Force durable sync of committed file writes plus directory/symlink installs and final directory metadata. For SSH `sync --delete`, completion waits for delete finalization. Local `sync --delete` deletions are not yet crash-durable.
 *   **`--ignore` (-i)**: (Repeatable) Skip files/directories matching a glob pattern (e.g., `-i "*.log"`).
 *   **`--exclude-from` (-E)**: Read exclude patterns from a file (one pattern per line).
 *   **`--threshold` (-t)**: (Default: 0.5) If the destination file is less than X% the size of the source, perform a full copy instead of hashing.
 *   **`--dry-run` (-n)**: Show what would have been transferred without making any changes.
 *   **`--verbose` (-v)**: Increase logging verbosity (use `-vv` for debug).
-*   **`--large-file-parallel-threshold`**: (Default: 1GiB) Enable SSH push chunk-parallel transfer for files at or above this size. Use 0 to disable.
-*   **`--large-file-parallel-workers`**: Set the number of SSH worker sessions for large-file push. If omitted, `pxs` chooses a conservative default from available CPU cores.
+*   **`--large-file-parallel-threshold`**: (Default: 1GiB) Enable SSH chunk-parallel transfer for files at or above this size when the source is local and the destination is remote. Use 0 to disable.
+*   **`--large-file-parallel-workers`**: Set the number of SSH worker sessions for those large outbound transfers. If omitted, `pxs` chooses a conservative default from available CPU cores.
 
 ## Progress Output & Quiet Mode
 
@@ -364,15 +302,15 @@ For use in cron jobs, scripts, or CI/CD pipelines, use the quiet flag to suppres
 
 ```bash
 # Sync without any progress bars or status messages
-pxs sync /src /dst --quiet
+pxs sync /dst /src --quiet
 # or using the short flag
-pxs sync /src /dst -q
+pxs sync /dst /src -q
 ```
 
 ### Exclude Example
 If you want to skip Postgres configuration files during a sync:
 ```bash
-pxs sync /var/lib/postgresql/data /backup/data \
+pxs sync /backup/data /var/lib/postgresql/data \
   --ignore "postmaster.opts" \
   --ignore "pg_hba.conf" \
   --ignore "postgresql.conf"
@@ -382,7 +320,7 @@ Or using a file:
 ```bash
 echo "postmaster.pid" > excludes.txt
 echo "*.log" >> excludes.txt
-pxs sync /src /dst -E excludes.txt
+pxs sync /dst /src -E excludes.txt
 ```
 
 ## How the Ignore Mechanism Works
@@ -438,19 +376,19 @@ cargo test
 Podman end-to-end tests are also available:
 
 ```bash
-# Direct TCP pull using serve/pull
+# Direct TCP sync from a `serve` endpoint
 ./tests/podman/test_tcp_pull.sh
 
-# SSH pull end-to-end
+# SSH sync from a remote source
 ./tests/podman/test_ssh_pull.sh
 
-# SSH push end-to-end
+# SSH sync to a remote destination
 ./tests/podman/test_ssh_push.sh
 
-# SSH pull resume/truncation end-to-end
+# SSH sync resume/truncation from a remote source
 ./tests/podman/test_ssh_pull_resume.sh
 
-# Direct TCP push end-to-end
+# Direct TCP sync to a `listen` endpoint
 ./tests/podman/test_tcp_push.sh
 
 # Direct TCP directory/resume edge cases end-to-end
