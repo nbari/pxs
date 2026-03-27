@@ -4,6 +4,8 @@ set -euo pipefail
 # Build pxs release
 cargo build --release
 
+bash tests/podman/ensure_ssh_key.sh
+
 DOCKER=${DOCKER:-podman}
 IMAGE="pxs-tcp-pull-test"
 NETWORK="pxs-tcp-pull-net"

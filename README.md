@@ -238,7 +238,7 @@ pxs sync ./snapshot.bin 192.168.1.10:8080/snapshots/base.tar.zst
 pxs sync /srv/restore/data 192.168.1.10:8080/pgdata --checksum
 ```
 
-For raw TCP endpoints, source-side options such as `--checksum`, `--threshold`, and `--ignore` still belong on `serve`. The path in `host:port/path` selects what to read or write within the configured `serve` or `listen` root.
+For raw TCP endpoints, the path in `host:port/path` selects what to read or write within the configured `serve` or `listen` root. Per-sync flags such as `--checksum`, `--threshold`, `--delete`, and `--ignore` are carried by the client `pxs sync` request.
 
 ### Legacy Aliases
 `push` and `pull` still exist as hidden compatibility aliases, but the public CLI and README now standardize on `pxs sync DEST SRC`.
@@ -272,7 +272,7 @@ This repository includes [`sync.sh`](./sync.sh), a PostgreSQL-focused migration 
 
 *   **`--quiet` (-q)**: Suppress all progress bars and status messages.
 *   **`--checksum` (-c)**: Force a block-by-block hash comparison even if size/mtime match.
-*   **`--delete`**: Remove destination entries that are not present in the source tree. Supported for local `sync` and SSH `sync`. Raw TCP and public stdio flows currently reject it.
+*   **`--delete`**: Remove destination entries that are not present in the source tree. Supported for directory `sync` over local, SSH, and raw TCP transports. Hidden public-stdio flows still reject it.
 *   **`--fsync` (-f)**: Force durable sync of committed file writes plus directory/symlink installs and final directory metadata. For SSH `sync --delete`, completion waits for delete finalization. Local `sync --delete` deletions are not yet crash-durable.
 *   **`--ignore` (-i)**: (Repeatable) Skip files/directories matching a glob pattern (e.g., `-i "*.log"`).
 *   **`--exclude-from` (-E)**: Read exclude patterns from a file (one pattern per line).

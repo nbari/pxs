@@ -3,10 +3,7 @@ set -euo pipefail
 
 cargo build --release
 
-if [ ! -f tests/podman/id_ed25519 ]; then
-    echo "Generating SSH keys for test..."
-    ssh-keygen -t ed25519 -f tests/podman/id_ed25519 -N ""
-fi
+bash tests/podman/ensure_ssh_key.sh
 
 DOCKER=${DOCKER:-podman}
 IMAGE="pxs-ssh-parallel-test"

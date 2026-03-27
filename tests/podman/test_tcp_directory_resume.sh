@@ -3,6 +3,8 @@ set -euo pipefail
 
 cargo build --release
 
+bash tests/podman/ensure_ssh_key.sh
+
 DOCKER=${DOCKER:-podman}
 IMAGE="pxs-tcp-tree-test"
 NETWORK="pxs-tcp-tree-net"

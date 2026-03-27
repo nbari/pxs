@@ -4,6 +4,8 @@ set -euo pipefail
 # Build pxs release
 cargo build --release
 
+bash tests/podman/ensure_ssh_key.sh
+
 # Use podman or docker
 DOCKER=${DOCKER:-podman}
 
