@@ -8,29 +8,28 @@ use clap::{
 };
 use std::path::PathBuf;
 
-const LONG_ABOUT: &str = "pxs is a file synchronization tool for the same broad \
-    job as rsync: moving data trees efficiently and refreshing existing copies \
-    with as little work as possible. It is not a drop-in replacement for rsync. \
-    pxs focuses on modern large-data sync workloads and uses Rust performance, \
-    parallelism, concurrency, fixed-block chunking, and high-throughput \
-    transport to speed up repeated synchronization when those choices help.\n\n\
+const LONG_ABOUT: &str = "pxs is an integrity-first sync and clone tool for \
+    large mutable datasets. It keeps destination trees accurate across local \
+    paths, SSH, and raw TCP, and it is designed to outperform rsync in target \
+    workloads such as PostgreSQL PGDATA, VM images, and repeated large-data \
+    refreshes. It is not a drop-in replacement for rsync.\n\n\
     EXAMPLES:\n\n\
-    1. Local Sync (File or Directory):\n\
-       pxs sync /data/new /data/old\n\n\
+    1. Local Sync:\n\
+       pxs sync /srv/restore/pgdata /var/lib/postgresql/data\n\n\
     2. SSH Sync:\n\
-       pxs sync /data/new user@db2:/data/old\n\n\
-    3. Network Sync - Receiver (Server 2):\n\
-       pxs listen 0.0.0.0:8080 /\n\n\
+       pxs sync /srv/restore/pgdata user@db2:/srv/export/pgdata\n\n\
+    3. Raw TCP Receiver Setup:\n\
+       pxs listen 0.0.0.0:8080 /srv\n\n\
     4. Raw TCP Sync:\n\
-       pxs sync /new/pgdata 192.168.1.10:8080/old/pgdata\n\n\
-    5. Force Content Verification (Checksum):\n\
-       pxs sync copy.bin file.bin --checksum\n\n\
+       pxs sync 192.168.1.10:8080/incoming/pgdata /var/lib/postgresql/data\n\n\
+    5. Verify And Durably Commit:\n\
+       pxs sync backup.bin file.bin --checksum --fsync\n\n\
     SUPPORTED PLATFORMS:\n\
        Linux, macOS, and BSD.\n\
        Windows is not supported.";
 const ABOUT: &str =
-    "pxs (Parallel X-Sync) - Rust file synchronization for modern large-data workloads.";
-const THRESHOLD_LONG_HELP: &str = "Value between 0.1 and 1.0. If the destination file size is less than this percentage of the source, a full rewrite is performed.";
+    "pxs (Parallel X-Sync) - Integrity-first sync/clone for large mutable datasets.";
+const THRESHOLD_LONG_HELP: &str = "Value between 0.1 and 1.0. If the destination file size is less than this fraction of the source, pxs rewrites the file instead of attempting block reuse.";
 const CHECKSUM_LONG_HELP: &str = "By default, pxs skips files if size and modification time match. Use this to force a block-by-block hash comparison. In network mode, pxs also performs end-to-end BLAKE3 verification after the transfer completes.";
 const FSYNC_LONG_HELP: &str =
     "Ensures that file data and metadata are flushed to disk before finishing. Slower but safer.";

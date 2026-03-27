@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Clarified the public project objective across the README, crate metadata, CLI help text, and benchmark script wording so `pxs` is consistently described as an integrity-first sync/clone tool for large mutable datasets rather than a general `rsync` replacement.
+- Reworked the README into an operator-focused guide and moved protocol and architecture notes into a dedicated contributor-facing design document.
+
 ## [0.6.0] - 2026-03-27
 
 ### Added

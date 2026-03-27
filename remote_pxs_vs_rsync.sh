@@ -5,6 +5,10 @@
 #    --remote-root /home/devops/pxs_bench/pgdata \
 #    --pxs-bin ./target/release/pxs
 
+# Targeted remote benchmark for repeated SSH sync into pre-seeded destinations.
+# Use it to compare pxs and rsync on a specific workload shape, not as a
+# universal performance proof.
+
 set -euo pipefail
 
 usage() {
@@ -25,6 +29,7 @@ Options:
   -h, --help            Show this help
 
 Notes:
+  - This is a workload-specific comparison helper, not a universal benchmark.
   - The script creates and resets only:
       REMOTE_ROOT/pxs
       REMOTE_ROOT/rsync
