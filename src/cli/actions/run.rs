@@ -604,6 +604,7 @@ async fn dispatch_internal_chunk_write_variant(
 mod tests {
     use super::{handle, resolve_local_file_destination};
     use crate::cli::actions::{Action, RemoteEndpoint, SyncOperand};
+    use anyhow::Result;
     use std::fs;
     use tempfile::tempdir;
 
@@ -624,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_local_file_destination_into_existing_directory() -> anyhow::Result<()> {
+    fn test_resolve_local_file_destination_into_existing_directory() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("source.bin");
         let dst_dir = dir.path().join("dest");
@@ -638,7 +639,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_local_sync_copies_file_into_existing_directory() -> anyhow::Result<()> {
+    async fn test_handle_local_sync_copies_file_into_existing_directory() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("source.txt");
         let dst_dir = dir.path().join("dest");
@@ -654,8 +655,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_local_sync_replaces_file_destination_with_directory() -> anyhow::Result<()>
-    {
+    async fn test_handle_local_sync_replaces_file_destination_with_directory() -> Result<()> {
         let dir = tempdir()?;
         let src_dir = dir.path().join("src");
         let dst_file = dir.path().join("dest.txt");
@@ -674,7 +674,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_local_sync_rejects_delete_for_single_file() -> anyhow::Result<()> {
+    async fn test_handle_local_sync_rejects_delete_for_single_file() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("source.txt");
         let dst = dir.path().join("dest.txt");
@@ -708,7 +708,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_push_stdio_rejects_fsync() -> anyhow::Result<()> {
+    async fn test_handle_push_stdio_rejects_fsync() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("source.txt");
         fs::write(&src, "payload")?;
@@ -737,7 +737,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_push_stdio_rejects_delete() -> anyhow::Result<()> {
+    async fn test_handle_push_stdio_rejects_delete() -> Result<()> {
         let dir = tempdir()?;
         let src_dir = dir.path().join("source");
         fs::create_dir_all(&src_dir)?;
@@ -766,7 +766,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_tcp_pull_allows_delete_request() -> anyhow::Result<()> {
+    async fn test_handle_tcp_pull_allows_delete_request() -> Result<()> {
         let dir = tempdir()?;
         let dst = dir.path().join("dst");
         fs::create_dir_all(&dst)?;
@@ -802,7 +802,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_local_sync_rejects_symlinked_parent_destination() -> anyhow::Result<()> {
+    async fn test_handle_local_sync_rejects_symlinked_parent_destination() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("source.txt");
         let dst_root = dir.path().join("dest");

@@ -5,7 +5,7 @@ use crate::pxs::tools::{
         record_staged_seed_invocation,
     },
 };
-use anyhow::Context;
+use anyhow::{Context, Result};
 use std::{
     io,
     path::{Path, PathBuf},
@@ -58,7 +58,7 @@ fn try_clone_existing_file(_src: &std::fs::File, _dst: &std::fs::File) -> io::Re
 /// This first attempts a cheap filesystem clone and falls back to a byte copy.
 /// If the destination disappears between scheduling and staging, the caller can
 /// continue as a full copy from an empty file.
-fn seed_staged_file(staged: &mut std::fs::File, final_path: &Path) -> anyhow::Result<()> {
+fn seed_staged_file(staged: &mut std::fs::File, final_path: &Path) -> Result<()> {
     record_staged_seed_invocation();
     let mut existing = match std::fs::File::open(final_path) {
         Ok(file) => file,
@@ -75,7 +75,7 @@ fn seed_staged_file(staged: &mut std::fs::File, final_path: &Path) -> anyhow::Re
     Ok(())
 }
 
-fn remove_path_if_exists(path: &Path) -> anyhow::Result<()> {
+fn remove_path_if_exists(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) => {
             if meta.is_dir() {
@@ -90,7 +90,7 @@ fn remove_path_if_exists(path: &Path) -> anyhow::Result<()> {
     }
 }
 
-fn unique_sibling_path(path: &Path, tag: &str) -> anyhow::Result<PathBuf> {
+fn unique_sibling_path(path: &Path, tag: &str) -> Result<PathBuf> {
     let parent = path.parent().ok_or_else(|| {
         anyhow::anyhow!(
             "path has no parent directory for sibling generation: {}",
@@ -136,7 +136,7 @@ impl StagedFile {
     /// # Errors
     ///
     /// Returns an error if the destination has no parent directory or file name.
-    pub fn new(final_path: &Path) -> anyhow::Result<Self> {
+    pub fn new(final_path: &Path) -> Result<Self> {
         let parent = final_path.parent().ok_or_else(|| {
             anyhow::anyhow!(
                 "destination has no parent directory: {}",
@@ -180,7 +180,7 @@ impl StagedFile {
     /// # Errors
     ///
     /// Returns an error if the staging file cannot be created or initialized.
-    pub fn prepare(&self, size: u64, seed_from_existing: bool) -> anyhow::Result<()> {
+    pub fn prepare(&self, size: u64, seed_from_existing: bool) -> Result<()> {
         if let Some(parent) = self.staged_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create directory {}", parent.display()))?;
@@ -212,7 +212,7 @@ impl StagedFile {
     /// # Errors
     ///
     /// Returns an error if the final path cannot be replaced.
-    pub fn commit(&mut self) -> anyhow::Result<()> {
+    pub fn commit(&mut self) -> Result<()> {
         install_prepared_path(&self.staged_path, &self.final_path)?;
         self.committed = true;
         Ok(())
@@ -223,7 +223,7 @@ impl StagedFile {
     /// # Errors
     ///
     /// Returns an error if cleanup fails for reasons other than the file already being absent.
-    pub fn cleanup(&self) -> anyhow::Result<()> {
+    pub fn cleanup(&self) -> Result<()> {
         match std::fs::remove_file(&self.staged_path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -248,7 +248,7 @@ struct ReplacedEntry {
 }
 
 impl ReplacedEntry {
-    fn move_aside(path: &Path) -> anyhow::Result<Option<Self>> {
+    fn move_aside(path: &Path) -> Result<Option<Self>> {
         match std::fs::symlink_metadata(path) {
             Ok(_) => {
                 let backup_path = unique_sibling_path(path, "backup")?;
@@ -264,7 +264,7 @@ impl ReplacedEntry {
         }
     }
 
-    fn restore(&mut self) -> anyhow::Result<()> {
+    fn restore(&mut self) -> Result<()> {
         if !self.active {
             return Ok(());
         }
@@ -274,7 +274,7 @@ impl ReplacedEntry {
         Ok(())
     }
 
-    fn discard(&mut self) -> anyhow::Result<()> {
+    fn discard(&mut self) -> Result<()> {
         if !self.active {
             return Ok(());
         }
@@ -288,7 +288,7 @@ impl ReplacedEntry {
 static REPLACEMENT_FAILURE_HOOK: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
 
 #[cfg(test)]
-fn should_fail_after_backup_move() -> anyhow::Result<bool> {
+fn should_fail_after_backup_move() -> Result<bool> {
     let mut hook = REPLACEMENT_FAILURE_HOOK
         .lock()
         .map_err(|_| anyhow::anyhow!("replacement failure hook mutex poisoned"))?;
@@ -300,7 +300,7 @@ fn should_fail_after_backup_move() -> anyhow::Result<bool> {
 }
 
 #[cfg(test)]
-pub(crate) fn arm_replacement_failure_hook() -> anyhow::Result<()> {
+pub(crate) fn arm_replacement_failure_hook() -> Result<()> {
     let mut hook = REPLACEMENT_FAILURE_HOOK
         .lock()
         .map_err(|_| anyhow::anyhow!("replacement failure hook mutex poisoned"))?;
@@ -315,7 +315,7 @@ pub(crate) fn arm_replacement_failure_hook() -> anyhow::Result<()> {
 /// # Errors
 ///
 /// Returns an error if the temporary symlink cannot be created.
-pub fn create_prepared_symlink(target: &Path, final_path: &Path) -> anyhow::Result<PathBuf> {
+pub fn create_prepared_symlink(target: &Path, final_path: &Path) -> Result<PathBuf> {
     use std::os::unix::fs::symlink;
 
     let prepared_path = unique_sibling_path(final_path, "symlink")?;
@@ -335,7 +335,7 @@ pub fn create_prepared_symlink(target: &Path, final_path: &Path) -> anyhow::Resu
 /// # Errors
 ///
 /// Returns an error if the replacement cannot be installed.
-pub fn install_prepared_path(prepared_path: &Path, final_path: &Path) -> anyhow::Result<()> {
+pub fn install_prepared_path(prepared_path: &Path, final_path: &Path) -> Result<()> {
     let mut replaced = match std::fs::symlink_metadata(final_path) {
         Ok(meta) if meta.is_dir() => ReplacedEntry::move_aside(final_path)?,
         Ok(_) => None,
@@ -372,7 +372,7 @@ pub fn install_prepared_path(prepared_path: &Path, final_path: &Path) -> anyhow:
 /// # Errors
 ///
 /// Returns an error if the destination directory cannot be created safely.
-pub fn ensure_directory_path(path: &Path) -> anyhow::Result<()> {
+pub fn ensure_directory_path(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.is_dir() => return Ok(()),
         Ok(_) => {}

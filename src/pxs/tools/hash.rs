@@ -8,18 +8,18 @@ use crate::pxs::{
 use anyhow::Result;
 use std::{ops::Range, os::unix::fs::FileExt, path::Path};
 
-fn block_index(index: usize) -> anyhow::Result<u32> {
+fn block_index(index: usize) -> Result<u32> {
     u32::try_from(index).map_err(|error| anyhow::anyhow!(error))
 }
 
-fn block_offset(index: usize, block_size: u64) -> anyhow::Result<u64> {
+fn block_offset(index: usize, block_size: u64) -> Result<u64> {
     let block_index = u64::try_from(index).map_err(|error| anyhow::anyhow!(error))?;
     block_index
         .checked_mul(block_size)
         .ok_or_else(|| anyhow::anyhow!("block offset overflow"))
 }
 
-fn mmap_range(offset: u64, block_size: usize, len: usize) -> anyhow::Result<Option<Range<usize>>> {
+fn mmap_range(offset: u64, block_size: usize, len: usize) -> Result<Option<Range<usize>>> {
     let start = usize::try_from(offset).map_err(|error| anyhow::anyhow!(error))?;
     if start >= len {
         return Ok(None);
@@ -51,7 +51,7 @@ fn mmap_block_matches(
     offset: u64,
     block_size: usize,
     expected_hash: u64,
-) -> anyhow::Result<bool> {
+) -> Result<bool> {
     let Some(range) = mmap_range(offset, block_size, mmap.len())? else {
         return Ok(false);
     };
@@ -66,7 +66,7 @@ fn read_block_matches(
     buffer: &mut [u8],
     offset: u64,
     expected_hash: u64,
-) -> anyhow::Result<bool> {
+) -> Result<bool> {
     let bytes_read = file.read_at(buffer, offset)?;
     if bytes_read == 0 {
         return Ok(false);
@@ -87,7 +87,7 @@ pub fn compute_requested_blocks(
     full_path: &Path,
     hashes: &[u64],
     block_size: u64,
-) -> anyhow::Result<Vec<u32>> {
+) -> Result<Vec<u32>> {
     if hashes.is_empty() {
         return Ok(Vec::new());
     }
@@ -115,7 +115,7 @@ pub fn compute_requested_blocks(
     let num_blocks = hashes.len();
     let chunk_size = num_blocks.div_ceil(concurrency);
 
-    let mut requested = std::thread::scope(|scope| -> anyhow::Result<Vec<u32>> {
+    let mut requested = std::thread::scope(|scope| -> Result<Vec<u32>> {
         let mut workers = Vec::new();
 
         for (chunk_index, hash_chunk) in hashes.chunks(chunk_size).enumerate() {
@@ -123,7 +123,7 @@ pub fn compute_requested_blocks(
             let mmap_ref = mmap.as_ref().ok();
             let file_ref = &file;
 
-            workers.push(scope.spawn(move || -> anyhow::Result<Vec<u32>> {
+            workers.push(scope.spawn(move || -> Result<Vec<u32>> {
                 let mut local_requested = Vec::new();
                 let mut buffer = vec![0_u8; block_size_usize];
 
@@ -173,7 +173,7 @@ pub(crate) fn calculate_file_hashes_for_open_file(
     file: &std::fs::File,
     block_size: u64,
     mmap: Option<&memmap2::Mmap>,
-) -> anyhow::Result<Vec<u64>> {
+) -> Result<Vec<u64>> {
     let len = file.metadata()?.len();
     let num_blocks = len.div_ceil(block_size);
     let num_blocks_usize = usize::try_from(num_blocks).map_err(|error| anyhow::anyhow!(error))?;
@@ -197,7 +197,7 @@ pub(crate) fn calculate_file_hashes_for_open_file(
     let mut hashes = vec![0_u64; num_blocks_usize];
     let chunk_size = num_blocks_usize.div_ceil(concurrency);
 
-    std::thread::scope(|scope| -> anyhow::Result<()> {
+    std::thread::scope(|scope| -> Result<()> {
         let mut workers = Vec::new();
 
         for start_block in (0..num_blocks_usize).step_by(chunk_size) {
@@ -205,7 +205,7 @@ pub(crate) fn calculate_file_hashes_for_open_file(
             let mmap_ref = mmap;
             let file_ref = file;
 
-            workers.push(scope.spawn(move || -> anyhow::Result<(usize, Vec<u64>)> {
+            workers.push(scope.spawn(move || -> Result<(usize, Vec<u64>)> {
                 let mut local_hashes = Vec::with_capacity(end_block - start_block);
                 let mut buffer = vec![0_u8; block_size_usize];
 
@@ -253,7 +253,7 @@ pub(crate) fn calculate_file_hashes_for_open_file(
 /// # Errors
 ///
 /// Returns an error if file IO, task scheduling, or conversion fails.
-pub async fn calculate_file_hashes(path: &Path, block_size: u64) -> anyhow::Result<Vec<u64>> {
+pub async fn calculate_file_hashes(path: &Path, block_size: u64) -> Result<Vec<u64>> {
     let path = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let file = std::fs::File::open(&path)?;
@@ -268,7 +268,7 @@ pub async fn calculate_file_hashes(path: &Path, block_size: u64) -> anyhow::Resu
 /// # Errors
 ///
 /// Returns an error if file IO fails.
-pub async fn blake3_file_hash(path: &Path) -> anyhow::Result<[u8; 32]> {
+pub async fn blake3_file_hash(path: &Path) -> Result<[u8; 32]> {
     let path = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let mut hasher = blake3::Hasher::new();

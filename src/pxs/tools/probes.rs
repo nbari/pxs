@@ -1,3 +1,5 @@
+#[cfg(test)]
+use anyhow::Result;
 use std::path::Path;
 
 #[cfg(test)]
@@ -53,7 +55,7 @@ struct DurabilityProbeState {
 
 #[cfg(test)]
 impl DurabilityProbeState {
-    fn snapshot(&self) -> anyhow::Result<test_support::DurabilityProbeSnapshot> {
+    fn snapshot(&self) -> Result<test_support::DurabilityProbeSnapshot> {
         let synced_paths = self
             .synced_paths
             .lock()
@@ -146,7 +148,7 @@ pub(crate) fn record_staged_clone_attempt() {
     });
 }
 
-#[cfg(all(not(test), target_os = "linux"))]
+#[cfg(not(test))]
 pub(crate) fn record_staged_clone_attempt() {}
 
 #[cfg(test)]
@@ -156,7 +158,7 @@ pub(crate) fn record_staged_clone_success() {
     });
 }
 
-#[cfg(all(not(test), target_os = "linux"))]
+#[cfg(not(test))]
 pub(crate) fn record_staged_clone_success() {}
 
 #[cfg(test)]
@@ -203,6 +205,7 @@ pub mod test_support {
         ACTIVE_DURABILITY_PROBE, ACTIVE_OPTIMIZATION_PROBE, Arc, DurabilityProbeState,
         OptimizationProbeState, PathBuf,
     };
+    use anyhow::Result;
 
     /// Snapshot of optimization events recorded while a probe is active.
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -241,7 +244,7 @@ pub mod test_support {
         /// # Errors
         ///
         /// Returns an error if another optimization probe is already active in the current process.
-        pub fn start() -> anyhow::Result<Self> {
+        pub fn start() -> Result<Self> {
             let state = Arc::new(OptimizationProbeState::new());
             let mut active = ACTIVE_OPTIMIZATION_PROBE
                 .lock()
@@ -279,7 +282,7 @@ pub mod test_support {
         /// # Errors
         ///
         /// Returns an error if another durability probe is already active in the current process.
-        pub fn start() -> anyhow::Result<Self> {
+        pub fn start() -> Result<Self> {
             let state = Arc::new(DurabilityProbeState::default());
             let mut active = ACTIVE_DURABILITY_PROBE
                 .lock()
@@ -292,7 +295,7 @@ pub mod test_support {
         }
 
         /// Return the durability sync operations collected by this probe so far.
-        pub fn snapshot(&self) -> anyhow::Result<DurabilityProbeSnapshot> {
+        pub fn snapshot(&self) -> Result<DurabilityProbeSnapshot> {
             self.state.snapshot()
         }
     }

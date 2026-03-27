@@ -1,4 +1,5 @@
 use super::{path::validate_protocol_path, protocol::FileMetadata};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
@@ -17,10 +18,7 @@ pub(crate) enum SyncTask {
     },
 }
 
-fn build_overrides(
-    src_root: &Path,
-    ignores: &[String],
-) -> anyhow::Result<ignore::overrides::Override> {
+fn build_overrides(src_root: &Path, ignores: &[String]) -> Result<ignore::overrides::Override> {
     use ignore::overrides::OverrideBuilder;
 
     let mut override_builder = OverrideBuilder::new(src_root);
@@ -38,10 +36,7 @@ pub(crate) fn source_path_for(src_root: &Path, rel_path: &str) -> PathBuf {
     }
 }
 
-fn collect_sync_tasks_sync(
-    src_root: &Path,
-    ignores: &[String],
-) -> anyhow::Result<(Vec<SyncTask>, u64)> {
+fn collect_sync_tasks_sync(src_root: &Path, ignores: &[String]) -> Result<(Vec<SyncTask>, u64)> {
     use ignore::WalkBuilder;
 
     let mut tasks = Vec::new();
@@ -110,7 +105,7 @@ fn collect_sync_tasks_sync(
 pub(crate) async fn collect_sync_tasks(
     src_root: &Path,
     ignores: &[String],
-) -> anyhow::Result<(Vec<SyncTask>, u64)> {
+) -> Result<(Vec<SyncTask>, u64)> {
     let src_root_owned = src_root.to_path_buf();
     let ignores_owned = ignores.to_vec();
     tokio::task::spawn_blocking(move || collect_sync_tasks_sync(&src_root_owned, &ignores_owned))

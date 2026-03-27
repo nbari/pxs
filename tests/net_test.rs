@@ -1,3 +1,4 @@
+use anyhow::Result;
 use bytes::BytesMut;
 use futures_util::{SinkExt, StreamExt};
 use indicatif::ProgressBar;
@@ -22,9 +23,7 @@ use tokio::task::JoinHandle;
 use tokio::{io::AsyncReadExt, io::AsyncWriteExt};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 
-async fn spawn_receiver(
-    dst_root: PathBuf,
-) -> anyhow::Result<(std::net::SocketAddr, JoinHandle<()>)> {
+async fn spawn_receiver(dst_root: PathBuf) -> Result<(std::net::SocketAddr, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
 
@@ -44,6 +43,22 @@ async fn spawn_receiver(
     Ok((addr, receiver_handle))
 }
 
+async fn spawn_listener_receiver(
+    dst_root: PathBuf,
+) -> Result<(std::net::SocketAddr, JoinHandle<()>)> {
+    let probe = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = probe.local_addr()?;
+    drop(probe);
+
+    let addr_string = addr.to_string();
+    let receiver_handle = tokio::spawn(async move {
+        let _ = net::run_receiver(&addr_string, &dst_root, false).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    Ok((addr, receiver_handle))
+}
+
 async fn stop_receiver(receiver_handle: JoinHandle<()>) {
     tokio::time::sleep(Duration::from_millis(100)).await;
     receiver_handle.abort();
@@ -51,7 +66,7 @@ async fn stop_receiver(receiver_handle: JoinHandle<()>) {
 
 async fn spawn_counting_receiver(
     dst_root: PathBuf,
-) -> anyhow::Result<(std::net::SocketAddr, JoinHandle<()>, Arc<AtomicUsize>)> {
+) -> Result<(std::net::SocketAddr, JoinHandle<()>, Arc<AtomicUsize>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let accepted = Arc::new(AtomicUsize::new(0));
@@ -79,7 +94,7 @@ fn spawn_stdio_receiver(
     bin: &str,
     dst_root: &std::path::Path,
     receiver_args: &[&str],
-) -> anyhow::Result<tokio::process::Child> {
+) -> Result<tokio::process::Child> {
     let mut receiver = Command::new(bin);
     receiver
         .arg("--quiet")
@@ -97,7 +112,7 @@ fn spawn_stdio_sender(
     bin: &str,
     src_root: &std::path::Path,
     sender_args: &[&str],
-) -> anyhow::Result<tokio::process::Child> {
+) -> Result<tokio::process::Child> {
     let mut sender = Command::new(bin);
     sender
         .arg("--quiet")
@@ -117,7 +132,7 @@ fn create_parallel_transfer_record(
     transfer_id: &str,
     chunk_path: &str,
     staged_path: &std::path::Path,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let record_dir = dst_root.join(".pxs-transfers").join(transfer_id);
     std::fs::create_dir_all(&record_dir)?;
     std::fs::write(record_dir.join("path"), chunk_path.as_bytes())?;
@@ -127,7 +142,7 @@ fn create_parallel_transfer_record(
 
 fn child_framed(
     child: &mut tokio::process::Child,
-) -> anyhow::Result<
+) -> Result<
     Framed<tokio::io::Join<tokio::process::ChildStdout, tokio::process::ChildStdin>, net::PxsCodec>,
 > {
     let stdout = child
@@ -143,7 +158,7 @@ fn child_framed(
 
 async fn wait_for_child(
     mut child: tokio::process::Child,
-) -> anyhow::Result<(std::process::ExitStatus, String)> {
+) -> Result<(std::process::ExitStatus, String)> {
     let stderr = child
         .stderr
         .take()
@@ -167,7 +182,7 @@ async fn run_stdio_sync(
     src_root: &std::path::Path,
     dst_root: &std::path::Path,
     sender_args: &[&str],
-) -> anyhow::Result<()> {
+) -> Result<()> {
     run_stdio_sync_with_receiver_args(src_root, dst_root, sender_args, &[]).await
 }
 
@@ -176,7 +191,7 @@ async fn run_stdio_sync_with_receiver_args(
     dst_root: &std::path::Path,
     sender_args: &[&str],
     receiver_args: &[&str],
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let bin = env!("CARGO_BIN_EXE_pxs");
     let mut receiver = spawn_stdio_receiver(bin, dst_root, receiver_args)?;
     let mut sender = spawn_stdio_sender(bin, src_root, sender_args)?;
@@ -257,7 +272,7 @@ async fn run_stdio_sync_with_receiver_args(
     Ok(())
 }
 
-fn make_patterned_bytes(len: usize, step: usize, offset: usize) -> anyhow::Result<Vec<u8>> {
+fn make_patterned_bytes(len: usize, step: usize, offset: usize) -> Result<Vec<u8>> {
     let mut bytes = Vec::with_capacity(len);
     for index in 0..len {
         let value = (index.wrapping_mul(step).wrapping_add(offset)) % 251;
@@ -267,7 +282,7 @@ fn make_patterned_bytes(len: usize, step: usize, offset: usize) -> anyhow::Resul
 }
 
 #[test]
-fn test_protocol_serialization() -> anyhow::Result<()> {
+fn test_protocol_serialization() -> Result<()> {
     let metadata = FileMetadata {
         size: 1024 * 1024 * 1024,
         mtime: 1_739_276_543,
@@ -299,7 +314,7 @@ fn test_protocol_serialization() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_codec_uses_pxs_magic() -> anyhow::Result<()> {
+fn test_codec_uses_pxs_magic() -> Result<()> {
     let msg = Message::EndOfFile {
         path: String::from("test.bin"),
     };
@@ -325,7 +340,7 @@ fn test_codec_uses_pxs_magic() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_codec_rejects_oversized_frame() -> anyhow::Result<()> {
+fn test_codec_rejects_oversized_frame() -> Result<()> {
     let mut frame = BytesMut::new();
     frame.extend_from_slice(b"PXS1");
     frame.extend_from_slice(&u32::MAX.to_be_bytes());
@@ -342,7 +357,7 @@ fn test_codec_rejects_oversized_frame() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_codec_returns_none_for_incomplete_payload() -> anyhow::Result<()> {
+fn test_codec_returns_none_for_incomplete_payload() -> Result<()> {
     let msg = Message::EndOfFile {
         path: String::from("test.bin"),
     };
@@ -359,7 +374,7 @@ fn test_codec_returns_none_for_incomplete_payload() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_codec_resynchronizes_after_garbage_prefix() -> anyhow::Result<()> {
+fn test_codec_resynchronizes_after_garbage_prefix() -> Result<()> {
     let msg = Message::EndOfFile {
         path: String::from("test.bin"),
     };
@@ -383,7 +398,7 @@ fn test_codec_resynchronizes_after_garbage_prefix() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_full_network_sync_simulation() -> anyhow::Result<()> {
+async fn test_full_network_sync_simulation() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -401,7 +416,7 @@ async fn test_full_network_sync_simulation() -> anyhow::Result<()> {
         .collect::<Vec<_>>();
     std::fs::write(&file_path, &content)?;
 
-    let (addr, receiver_handle) = spawn_receiver(dst_dir.clone()).await?;
+    let (addr, receiver_handle) = spawn_listener_receiver(dst_dir.clone()).await?;
 
     // Run sender
     net::run_sender(&addr.to_string(), &src_dir, 0.5, true, false, &[]).await?;
@@ -417,7 +432,7 @@ async fn test_full_network_sync_simulation() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_raw_tcp_lz4_transfer_succeeds() -> anyhow::Result<()> {
+async fn test_raw_tcp_lz4_transfer_succeeds() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -449,7 +464,7 @@ async fn test_raw_tcp_lz4_transfer_succeeds() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_stdio_transport_end_to_end_sync() -> anyhow::Result<()> {
+async fn test_stdio_transport_end_to_end_sync() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -491,7 +506,7 @@ async fn test_stdio_transport_end_to_end_sync() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_stdio_transport_delete_removes_extraneous_entries() -> anyhow::Result<()> {
+async fn test_stdio_transport_delete_removes_extraneous_entries() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -516,7 +531,7 @@ async fn test_stdio_transport_delete_removes_extraneous_entries() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn test_stdio_transport_delete_preserves_ignored_destination_entries() -> anyhow::Result<()> {
+async fn test_stdio_transport_delete_preserves_ignored_destination_entries() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -548,8 +563,8 @@ async fn test_stdio_transport_delete_preserves_ignored_destination_entries() -> 
 }
 
 #[tokio::test]
-async fn test_stdio_receiver_requests_parallel_full_copy_and_cleans_transfer_record()
--> anyhow::Result<()> {
+async fn test_stdio_receiver_requests_parallel_full_copy_and_cleans_transfer_record() -> Result<()>
+{
     let dir = tempdir()?;
     let dst_root = dir.path().join("dst");
     std::fs::create_dir_all(&dst_root)?;
@@ -624,7 +639,7 @@ async fn test_stdio_receiver_requests_parallel_full_copy_and_cleans_transfer_rec
 }
 
 #[tokio::test]
-async fn test_stdio_receiver_requests_parallel_blocks_with_transfer_id() -> anyhow::Result<()> {
+async fn test_stdio_receiver_requests_parallel_blocks_with_transfer_id() -> Result<()> {
     let dir = tempdir()?;
     let dst_root = dir.path().join("dst");
     std::fs::create_dir_all(&dst_root)?;
@@ -714,7 +729,7 @@ async fn test_stdio_receiver_requests_parallel_blocks_with_transfer_id() -> anyh
 }
 
 #[tokio::test]
-async fn test_chunk_writer_rejects_unknown_transfer_id() -> anyhow::Result<()> {
+async fn test_chunk_writer_rejects_unknown_transfer_id() -> Result<()> {
     let dir = tempdir()?;
     let dst_root = dir.path().join("dst");
     std::fs::create_dir_all(&dst_root)?;
@@ -739,7 +754,7 @@ async fn test_chunk_writer_rejects_unknown_transfer_id() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_chunk_writer_rejects_transfer_path_mismatch() -> anyhow::Result<()> {
+async fn test_chunk_writer_rejects_transfer_path_mismatch() -> Result<()> {
     let dir = tempdir()?;
     let dst_root = dir.path().join("dst");
     std::fs::create_dir_all(&dst_root)?;
@@ -767,7 +782,7 @@ async fn test_chunk_writer_rejects_transfer_path_mismatch() -> anyhow::Result<()
 }
 
 #[tokio::test]
-async fn test_chunk_writer_supports_non_utf8_staged_path() -> anyhow::Result<()> {
+async fn test_chunk_writer_supports_non_utf8_staged_path() -> Result<()> {
     let dir = tempdir()?;
     let dst_root = dir.path().join("dst");
     std::fs::create_dir_all(&dst_root)?;
@@ -839,7 +854,7 @@ async fn test_chunk_writer_supports_non_utf8_staged_path() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-async fn test_raw_tcp_chunk_writer_rejects_unknown_transfer_id() -> anyhow::Result<()> {
+async fn test_raw_tcp_chunk_writer_rejects_unknown_transfer_id() -> Result<()> {
     let dir = tempdir()?;
     let dst_root = dir.path().join("dst");
     std::fs::create_dir_all(&dst_root)?;
@@ -885,7 +900,7 @@ async fn test_raw_tcp_chunk_writer_rejects_unknown_transfer_id() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn test_raw_tcp_push_truncates_existing_destination_for_empty_source() -> anyhow::Result<()> {
+async fn test_raw_tcp_push_truncates_existing_destination_for_empty_source() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -897,7 +912,7 @@ async fn test_raw_tcp_push_truncates_existing_destination_for_empty_source() -> 
     std::fs::write(&src_file, [])?;
     std::fs::write(&dst_file, b"non-empty destination payload")?;
 
-    let (addr, receiver_handle) = spawn_receiver(dst_dir.clone()).await?;
+    let (addr, receiver_handle) = spawn_listener_receiver(dst_dir.clone()).await?;
     net::run_sender(&addr.to_string(), &src_dir, 0.5, false, false, &[]).await?;
     stop_receiver(receiver_handle).await;
 
@@ -907,7 +922,7 @@ async fn test_raw_tcp_push_truncates_existing_destination_for_empty_source() -> 
 }
 
 #[tokio::test]
-async fn test_raw_tcp_push_honors_exact_remote_file_path() -> anyhow::Result<()> {
+async fn test_raw_tcp_push_honors_exact_remote_file_path() -> Result<()> {
     let dir = tempdir()?;
     let src_file = dir.path().join("src.bin");
     let dst_root = dir.path().join("dst");
@@ -939,7 +954,7 @@ async fn test_raw_tcp_push_honors_exact_remote_file_path() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-async fn test_raw_tcp_pull_honors_exact_local_file_path() -> anyhow::Result<()> {
+async fn test_raw_tcp_pull_honors_exact_local_file_path() -> Result<()> {
     let dir = tempdir()?;
     let src_root = dir.path().join("src");
     let dst_file = dir.path().join("local-copy.bin");
@@ -984,7 +999,103 @@ async fn test_raw_tcp_pull_honors_exact_local_file_path() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn test_raw_tcp_large_file_parallel_uses_multiple_connections() -> anyhow::Result<()> {
+async fn test_raw_tcp_push_delete_removes_extraneous_entries() -> Result<()> {
+    let dir = tempdir()?;
+    let src_dir = dir.path().join("src");
+    let dst_dir = dir.path().join("dst");
+    std::fs::create_dir_all(src_dir.join("nested"))?;
+    std::fs::create_dir_all(dst_dir.join("stale/subdir"))?;
+    std::fs::write(src_dir.join("keep.txt"), "fresh")?;
+    std::fs::write(src_dir.join("nested/keep.txt"), "nested-fresh")?;
+    std::fs::write(dst_dir.join("keep.txt"), "outdated")?;
+    std::fs::write(dst_dir.join("stale/subdir/old.txt"), "obsolete")?;
+
+    let (addr, receiver_handle) = spawn_listener_receiver(dst_dir.clone()).await?;
+    net::run_sender_with_features(
+        &addr.to_string(),
+        &src_dir,
+        net::RemoteSyncOptions {
+            path: None,
+            threshold: 0.5,
+            features: net::RemoteFeatureOptions {
+                checksum: false,
+                delete: true,
+                fsync: false,
+            },
+            large_file_parallel: None,
+            ignores: &[],
+        },
+    )
+    .await?;
+    stop_receiver(receiver_handle).await;
+
+    assert_eq!(std::fs::read_to_string(dst_dir.join("keep.txt"))?, "fresh");
+    assert_eq!(
+        std::fs::read_to_string(dst_dir.join("nested/keep.txt"))?,
+        "nested-fresh"
+    );
+    assert!(!dst_dir.join("stale").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_raw_tcp_pull_delete_removes_extraneous_entries() -> Result<()> {
+    let dir = tempdir()?;
+    let src_root = dir.path().join("src");
+    let dst_dir = dir.path().join("dst");
+    std::fs::create_dir_all(src_root.join("dataset/nested"))?;
+    std::fs::create_dir_all(dst_dir.join("stale/subdir"))?;
+    std::fs::write(src_root.join("dataset/keep.txt"), "remote-fresh")?;
+    std::fs::write(src_root.join("dataset/nested/keep.txt"), "remote-nested")?;
+    std::fs::write(dst_dir.join("keep.txt"), "old-local")?;
+    std::fs::write(dst_dir.join("stale/subdir/old.txt"), "obsolete")?;
+
+    let probe = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = probe.local_addr()?;
+    drop(probe);
+
+    let addr_string = addr.to_string();
+    let src_root_clone = src_root.clone();
+    let listener_task = tokio::spawn(async move {
+        let ignores = Vec::new();
+        let _ = net::run_sender_listener(&addr_string, &src_root_clone, 0.5, false, &ignores).await;
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    net::run_pull_client_with_options(
+        &addr.to_string(),
+        &dst_dir,
+        net::RemoteSyncOptions {
+            path: Some("/dataset"),
+            threshold: 0.5,
+            features: net::RemoteFeatureOptions {
+                checksum: false,
+                delete: true,
+                fsync: false,
+            },
+            large_file_parallel: None,
+            ignores: &[],
+        },
+    )
+    .await?;
+
+    listener_task.abort();
+    let _ = listener_task.await;
+
+    assert_eq!(
+        std::fs::read_to_string(dst_dir.join("keep.txt"))?,
+        "remote-fresh"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dst_dir.join("nested/keep.txt"))?,
+        "remote-nested"
+    );
+    assert!(!dst_dir.join("stale").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_raw_tcp_large_file_parallel_uses_multiple_connections() -> Result<()> {
     let dir = tempdir()?;
     let src_file = dir.path().join("large.bin");
     let dst_dir = dir.path().join("dst");
@@ -1018,7 +1129,7 @@ async fn test_raw_tcp_large_file_parallel_uses_multiple_connections() -> anyhow:
 }
 
 #[tokio::test]
-async fn test_network_sync_full_copy_spans_multiple_batches() -> anyhow::Result<()> {
+async fn test_network_sync_full_copy_spans_multiple_batches() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -1040,7 +1151,7 @@ async fn test_network_sync_full_copy_spans_multiple_batches() -> anyhow::Result<
 }
 
 #[test]
-fn test_block_serialization() -> anyhow::Result<()> {
+fn test_block_serialization() -> Result<()> {
     let block = Block {
         offset: 5000,
         data: vec![1, 2, 255, 4, 5],
@@ -1066,7 +1177,7 @@ fn test_block_serialization() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_network_sync_delta_requests_multiple_block_batches() -> anyhow::Result<()> {
+async fn test_network_sync_delta_requests_multiple_block_batches() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -1091,7 +1202,7 @@ async fn test_network_sync_delta_requests_multiple_block_batches() -> anyhow::Re
 }
 
 #[tokio::test]
-async fn test_network_sync_truncation() -> anyhow::Result<()> {
+async fn test_network_sync_truncation() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -1118,7 +1229,7 @@ async fn test_network_sync_truncation() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_network_sync_delta_truncates_without_requesting_blocks() -> anyhow::Result<()> {
+async fn test_network_sync_delta_truncates_without_requesting_blocks() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -1154,7 +1265,7 @@ async fn test_network_sync_delta_truncates_without_requesting_blocks() -> anyhow
 }
 
 #[tokio::test]
-async fn test_network_sync_deadlock_skipped_files() -> anyhow::Result<()> {
+async fn test_network_sync_deadlock_skipped_files() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -1191,7 +1302,7 @@ async fn test_network_sync_deadlock_skipped_files() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_network_sync_directory_mtime() -> anyhow::Result<()> {
+async fn test_network_sync_directory_mtime() -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
     let dir = tempdir()?;
@@ -1221,7 +1332,7 @@ async fn test_network_sync_directory_mtime() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_network_sync_nested_directory_mtime_order() -> anyhow::Result<()> {
+async fn test_network_sync_nested_directory_mtime_order() -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
     let dir = tempdir()?;
@@ -1255,7 +1366,7 @@ async fn test_network_sync_nested_directory_mtime_order() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn test_network_sync_file_replaces_directory() -> anyhow::Result<()> {
+async fn test_network_sync_file_replaces_directory() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -1278,7 +1389,7 @@ async fn test_network_sync_file_replaces_directory() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_network_sync_directory_replaces_file() -> anyhow::Result<()> {
+async fn test_network_sync_directory_replaces_file() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -1303,7 +1414,7 @@ async fn test_network_sync_directory_replaces_file() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_network_sync_broken_symlink_replaces_directory() -> anyhow::Result<()> {
+async fn test_network_sync_broken_symlink_replaces_directory() -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
     let dir = tempdir()?;
@@ -1337,7 +1448,7 @@ async fn test_network_sync_broken_symlink_replaces_directory() -> anyhow::Result
 }
 
 #[tokio::test]
-async fn test_sync_remote_file_normalizes_nested_relative_paths() -> anyhow::Result<()> {
+async fn test_sync_remote_file_normalizes_nested_relative_paths() -> Result<()> {
     let dir = tempdir()?;
     let src_root = dir.path().join("src");
     let nested_dir = src_root.join("dir/nested");
@@ -1406,7 +1517,7 @@ async fn test_sync_remote_file_normalizes_nested_relative_paths() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn test_sync_remote_file_rejects_mismatched_response_path() -> anyhow::Result<()> {
+async fn test_sync_remote_file_rejects_mismatched_response_path() -> Result<()> {
     let dir = tempdir()?;
     let src_root = dir.path().join("src");
     std::fs::create_dir_all(&src_root)?;
@@ -1457,7 +1568,7 @@ async fn test_sync_remote_file_rejects_mismatched_response_path() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn test_handle_client_rejects_unsafe_protocol_paths() -> anyhow::Result<()> {
+async fn test_handle_client_rejects_unsafe_protocol_paths() -> Result<()> {
     let metadata = FileMetadata {
         size: 0,
         mtime: 0,
@@ -1503,7 +1614,7 @@ async fn test_handle_client_rejects_unsafe_protocol_paths() -> anyhow::Result<()
 }
 
 #[tokio::test]
-async fn test_handle_client_rejects_duplicate_handshake() -> anyhow::Result<()> {
+async fn test_handle_client_rejects_duplicate_handshake() -> Result<()> {
     let dir = tempdir()?;
     let (client, server) = tokio::io::duplex(4096);
     let dst_root = dir.path().to_path_buf();
@@ -1537,7 +1648,7 @@ async fn test_handle_client_rejects_duplicate_handshake() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn test_handle_client_rejects_receiver_side_request_message() -> anyhow::Result<()> {
+async fn test_handle_client_rejects_receiver_side_request_message() -> Result<()> {
     let dir = tempdir()?;
     let (client, server) = tokio::io::duplex(4096);
     let dst_root = dir.path().to_path_buf();
@@ -1574,7 +1685,7 @@ async fn test_handle_client_rejects_receiver_side_request_message() -> anyhow::R
 }
 
 #[tokio::test]
-async fn test_handle_client_rejects_orphan_verify_checksum() -> anyhow::Result<()> {
+async fn test_handle_client_rejects_orphan_verify_checksum() -> Result<()> {
     let dir = tempdir()?;
     let (client, server) = tokio::io::duplex(4096);
     let dst_root = dir.path().to_path_buf();
@@ -1612,7 +1723,7 @@ async fn test_handle_client_rejects_orphan_verify_checksum() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn test_run_sender_rejects_incompatible_handshake_response() -> anyhow::Result<()> {
+async fn test_run_sender_rejects_incompatible_handshake_response() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     std::fs::create_dir_all(&src_dir)?;
@@ -1650,7 +1761,7 @@ async fn test_run_sender_rejects_incompatible_handshake_response() -> anyhow::Re
 }
 
 #[tokio::test]
-async fn test_run_sender_rejects_invalid_handshake_version_format() -> anyhow::Result<()> {
+async fn test_run_sender_rejects_invalid_handshake_version_format() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     std::fs::create_dir_all(&src_dir)?;
@@ -1688,7 +1799,7 @@ async fn test_run_sender_rejects_invalid_handshake_version_format() -> anyhow::R
 }
 
 #[tokio::test]
-async fn test_sender_listener_refreshes_source_tree_per_client() -> anyhow::Result<()> {
+async fn test_sender_listener_refreshes_source_tree_per_client() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -1733,7 +1844,7 @@ async fn test_sender_listener_refreshes_source_tree_per_client() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn test_network_sync_with_checksum_verification() -> anyhow::Result<()> {
+async fn test_network_sync_with_checksum_verification() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -1771,7 +1882,7 @@ async fn test_network_sync_with_checksum_verification() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_blake3_file_hash() -> anyhow::Result<()> {
+async fn test_blake3_file_hash() -> Result<()> {
     let dir = tempdir()?;
     let file_path = dir.path().join("test.bin");
 
@@ -1788,7 +1899,7 @@ async fn test_blake3_file_hash() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_partial_file_cleanup_on_error() -> anyhow::Result<()> {
+async fn test_partial_file_cleanup_on_error() -> Result<()> {
     let dir = tempdir()?;
     let dst_dir = dir.path().join("dst");
     std::fs::create_dir_all(&dst_dir)?;
@@ -1862,7 +1973,7 @@ async fn test_partial_file_cleanup_on_error() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_partial_update_failure_preserves_existing_file() -> anyhow::Result<()> {
+async fn test_partial_update_failure_preserves_existing_file() -> Result<()> {
     let dir = tempdir()?;
     let dst_dir = dir.path().join("dst");
     std::fs::create_dir_all(&dst_dir)?;
@@ -1928,7 +2039,7 @@ async fn test_partial_update_failure_preserves_existing_file() -> anyhow::Result
 }
 
 #[tokio::test]
-async fn test_checksum_mismatch_preserves_existing_file() -> anyhow::Result<()> {
+async fn test_checksum_mismatch_preserves_existing_file() -> Result<()> {
     let dir = tempdir()?;
     let dst_dir = dir.path().join("dst");
     std::fs::create_dir_all(&dst_dir)?;
@@ -2028,7 +2139,7 @@ async fn test_checksum_mismatch_preserves_existing_file() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn test_apply_metadata_does_not_follow_symlinks() -> anyhow::Result<()> {
+async fn test_apply_metadata_does_not_follow_symlinks() -> Result<()> {
     let dir = tempdir()?;
     let (client, server) = tokio::io::duplex(4096);
     let dst_root = dir.path().to_path_buf();
@@ -2097,7 +2208,7 @@ async fn test_apply_metadata_does_not_follow_symlinks() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_file_rejects_parent_symlink_traversal() -> anyhow::Result<()> {
+async fn test_sync_file_rejects_parent_symlink_traversal() -> Result<()> {
     let dir = tempdir()?;
     let (client, server) = tokio::io::duplex(4096);
     let dst_root = dir.path().to_path_buf();
@@ -2152,7 +2263,7 @@ async fn test_sync_file_rejects_parent_symlink_traversal() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-async fn test_sync_file_rejects_symlinked_destination_root() -> anyhow::Result<()> {
+async fn test_sync_file_rejects_symlinked_destination_root() -> Result<()> {
     let dir = tempdir()?;
     let (client, server) = tokio::io::duplex(4096);
     let external_dir = tempdir()?;
@@ -2209,7 +2320,7 @@ async fn test_sync_file_rejects_symlinked_destination_root() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn test_sync_replaces_broken_symlink_at_destination() -> anyhow::Result<()> {
+async fn test_sync_replaces_broken_symlink_at_destination() -> Result<()> {
     let dir = tempdir()?;
     let (client, server) = tokio::io::duplex(4096);
     let dst_root = dir.path().to_path_buf();
@@ -2291,7 +2402,7 @@ async fn test_sync_replaces_broken_symlink_at_destination() -> anyhow::Result<()
 }
 
 #[tokio::test]
-async fn test_sync_replaces_broken_symlink_with_new_symlink() -> anyhow::Result<()> {
+async fn test_sync_replaces_broken_symlink_with_new_symlink() -> Result<()> {
     let dir = tempdir()?;
     let (client, server) = tokio::io::duplex(4096);
     let dst_root = dir.path().to_path_buf();
@@ -2347,7 +2458,7 @@ async fn test_sync_replaces_broken_symlink_with_new_symlink() -> anyhow::Result<
 }
 
 #[tokio::test]
-async fn test_receiver_reports_permission_denied_error_to_sender() -> anyhow::Result<()> {
+async fn test_receiver_reports_permission_denied_error_to_sender() -> Result<()> {
     let dir = tempdir()?;
     let (client, server) = tokio::io::duplex(4096);
     let dst_root = dir.path().to_path_buf();
@@ -2416,7 +2527,7 @@ async fn test_receiver_reports_permission_denied_error_to_sender() -> anyhow::Re
 }
 
 #[tokio::test]
-async fn test_run_sender_forwards_fsync_session_option_for_tcp_push() -> anyhow::Result<()> {
+async fn test_run_sender_forwards_fsync_session_option_for_tcp_push() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     std::fs::create_dir_all(src_dir.join("nested"))?;
@@ -2493,7 +2604,7 @@ async fn test_run_sender_forwards_fsync_session_option_for_tcp_push() -> anyhow:
 }
 
 #[tokio::test]
-async fn test_run_sender_reports_non_file_control_connection_error() -> anyhow::Result<()> {
+async fn test_run_sender_reports_non_file_control_connection_error() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -2529,7 +2640,7 @@ async fn test_run_sender_reports_non_file_control_connection_error() -> anyhow::
 }
 
 #[tokio::test]
-async fn test_handle_client_rejects_premature_sync_complete() -> anyhow::Result<()> {
+async fn test_handle_client_rejects_premature_sync_complete() -> Result<()> {
     let dir = tempdir()?;
     let (client, server) = tokio::io::duplex(4096);
     let dst_root = dir.path().to_path_buf();
@@ -2593,8 +2704,8 @@ async fn test_handle_client_rejects_premature_sync_complete() -> anyhow::Result<
 }
 
 #[tokio::test]
-async fn test_handle_client_recovers_if_destination_disappears_after_request_hashes()
--> anyhow::Result<()> {
+async fn test_handle_client_recovers_if_destination_disappears_after_request_hashes() -> Result<()>
+{
     let dir = tempdir()?;
     let src_file = dir.path().join("src.bin");
     let dst_root = dir.path().join("dst");

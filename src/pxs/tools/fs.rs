@@ -40,7 +40,7 @@ pub fn preallocate(path: &Path, size: u64) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error if the parent directory cannot be opened or synced.
-pub fn sync_parent_directory(path: &Path) -> anyhow::Result<()> {
+pub fn sync_parent_directory(path: &Path) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("path has no parent directory: {}", path.display()))?;
@@ -55,7 +55,7 @@ pub fn sync_parent_directory(path: &Path) -> anyhow::Result<()> {
 /// # Errors
 ///
 /// Returns an error if the path cannot be opened or synced.
-pub fn sync_path(path: &Path) -> anyhow::Result<()> {
+pub fn sync_path(path: &Path) -> Result<()> {
     let handle = std::fs::File::open(path)?;
     handle.sync_all()?;
     record_synced_path(path);
@@ -67,7 +67,7 @@ pub fn sync_path(path: &Path) -> anyhow::Result<()> {
 /// # Errors
 ///
 /// Returns an error if either sync operation fails.
-pub fn sync_directory_and_parent(path: &Path) -> anyhow::Result<()> {
+pub fn sync_directory_and_parent(path: &Path) -> Result<()> {
     sync_path(path)?;
     sync_parent_directory(path)?;
     Ok(())

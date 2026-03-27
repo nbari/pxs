@@ -8,6 +8,7 @@ use crate::pxs::{
     net::{self, PxsCodec},
     sync::{self, SyncOptions},
 };
+use anyhow::Result;
 use std::{
     path::PathBuf,
     sync::{Mutex as StdMutex, OnceLock},
@@ -35,7 +36,7 @@ fn durability_test_lock() -> &'static Mutex<()> {
 async fn spawn_receiver(
     dst_root: PathBuf,
     fsync: bool,
-) -> anyhow::Result<(std::net::SocketAddr, JoinHandle<()>)> {
+) -> Result<(std::net::SocketAddr, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
 
@@ -62,7 +63,7 @@ async fn stop_receiver(receiver_handle: JoinHandle<()>) {
 }
 
 #[tokio::test]
-async fn test_network_transfer_uses_mmap_source_reads() -> anyhow::Result<()> {
+async fn test_network_transfer_uses_mmap_source_reads() -> Result<()> {
     let _guard = optimization_test_lock().lock().await;
 
     let dir = tempdir()?;
@@ -77,7 +78,7 @@ async fn test_network_transfer_uses_mmap_source_reads() -> anyhow::Result<()> {
             u8::try_from(index % 251)
                 .map_err(|error: std::num::TryFromIntError| anyhow::anyhow!(error))
         })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
     std::fs::write(&file_path, &content)?;
 
     let probe = OptimizationProbe::start()?;
@@ -95,7 +96,7 @@ async fn test_network_transfer_uses_mmap_source_reads() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_network_delta_seeding_attempts_staged_clone() -> anyhow::Result<()> {
+async fn test_network_delta_seeding_attempts_staged_clone() -> Result<()> {
     let _guard = optimization_test_lock().lock().await;
 
     let dir = tempdir()?;
@@ -137,7 +138,7 @@ async fn test_network_delta_seeding_attempts_staged_clone() -> anyhow::Result<()
 }
 
 #[tokio::test]
-async fn test_network_checksum_mode_skips_staging_on_match() -> anyhow::Result<()> {
+async fn test_network_checksum_mode_skips_staging_on_match() -> Result<()> {
     let _guard = optimization_test_lock().lock().await;
 
     let dir = tempdir()?;
@@ -167,7 +168,7 @@ async fn test_network_checksum_mode_skips_staging_on_match() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn test_local_directory_fsync_syncs_directories() -> anyhow::Result<()> {
+async fn test_local_directory_fsync_syncs_directories() -> Result<()> {
     let _guard = durability_test_lock().lock().await;
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
@@ -191,7 +192,7 @@ async fn test_local_directory_fsync_syncs_directories() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_network_symlink_fsync_syncs_parent_directory() -> anyhow::Result<()> {
+async fn test_network_symlink_fsync_syncs_parent_directory() -> Result<()> {
     let _guard = durability_test_lock().lock().await;
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
@@ -217,7 +218,7 @@ async fn test_network_symlink_fsync_syncs_parent_directory() -> anyhow::Result<(
 }
 
 #[test]
-fn test_install_prepared_path_restores_original_directory_on_failure() -> anyhow::Result<()> {
+fn test_install_prepared_path_restores_original_directory_on_failure() -> Result<()> {
     let _guard = replacement_test_lock()
         .lock()
         .map_err(|_| anyhow::anyhow!("replacement test lock poisoned"))?;
@@ -245,7 +246,7 @@ fn test_install_prepared_path_restores_original_directory_on_failure() -> anyhow
 }
 
 #[test]
-fn test_ensure_directory_path_restores_conflicting_file_on_failure() -> anyhow::Result<()> {
+fn test_ensure_directory_path_restores_conflicting_file_on_failure() -> Result<()> {
     let _guard = replacement_test_lock()
         .lock()
         .map_err(|_| anyhow::anyhow!("replacement test lock poisoned"))?;
@@ -275,7 +276,7 @@ fn test_default_large_file_parallel_workers_is_conservative() {
 }
 
 #[test]
-fn test_compute_requested_blocks_handles_empty_hash_list() -> anyhow::Result<()> {
+fn test_compute_requested_blocks_handles_empty_hash_list() -> Result<()> {
     let dir = tempdir()?;
     let file_path = dir.path().join("existing.bin");
     std::fs::write(&file_path, b"existing payload")?;

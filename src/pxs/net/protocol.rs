@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{Context, Result};
 use filetime::FileTime;
 use rkyv::{
     api::high::to_bytes_in,
@@ -183,7 +183,7 @@ struct BlockBatchPayload {
 /// # Errors
 ///
 /// Returns an error if serialization fails.
-pub fn serialize_message(msg: &Message) -> anyhow::Result<AlignedVec<16>> {
+pub fn serialize_message(msg: &Message) -> Result<AlignedVec<16>> {
     let mut vec = AlignedVec::<16>::new();
     to_bytes_in::<_, rkyv::rancor::Error>(msg, &mut vec)
         .map_err(|e| anyhow::anyhow!("failed to serialize message: {e}"))?;
@@ -195,7 +195,7 @@ pub fn serialize_message(msg: &Message) -> anyhow::Result<AlignedVec<16>> {
 /// # Errors
 ///
 /// Returns an error if deserialization fails.
-pub fn deserialize_message(bytes: &[u8]) -> anyhow::Result<Message> {
+pub fn deserialize_message(bytes: &[u8]) -> Result<Message> {
     let mut aligned = AlignedVec::<16>::new();
     aligned.extend_from_slice(bytes);
     rkyv::from_bytes::<Message, rkyv::rancor::Error>(&aligned)
@@ -207,7 +207,7 @@ pub fn deserialize_message(bytes: &[u8]) -> anyhow::Result<Message> {
 /// # Errors
 ///
 /// Returns an error if serialization fails.
-pub(crate) fn serialize_block_batch(blocks: &[Block]) -> anyhow::Result<AlignedVec<16>> {
+pub(crate) fn serialize_block_batch(blocks: &[Block]) -> Result<AlignedVec<16>> {
     let payload = BlockBatchPayload {
         blocks: blocks.to_vec(),
     };
@@ -222,7 +222,7 @@ pub(crate) fn serialize_block_batch(blocks: &[Block]) -> anyhow::Result<AlignedV
 /// # Errors
 ///
 /// Returns an error if deserialization fails.
-pub(crate) fn deserialize_block_batch(bytes: &[u8]) -> anyhow::Result<Vec<Block>> {
+pub(crate) fn deserialize_block_batch(bytes: &[u8]) -> Result<Vec<Block>> {
     let mut aligned = AlignedVec::<16>::new();
     aligned.extend_from_slice(bytes);
     let payload = rkyv::from_bytes::<BlockBatchPayload, rkyv::rancor::Error>(&aligned)
@@ -235,7 +235,7 @@ pub(crate) fn deserialize_block_batch(bytes: &[u8]) -> anyhow::Result<Vec<Block>
 /// # Errors
 ///
 /// Returns an error if any attribute fails to be applied.
-pub fn apply_file_metadata(path: &Path, metadata: &FileMetadata) -> anyhow::Result<()> {
+pub fn apply_file_metadata(path: &Path, metadata: &FileMetadata) -> Result<()> {
     use std::fs::Permissions;
     use std::os::unix::fs::PermissionsExt;
 

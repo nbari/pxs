@@ -1,3 +1,4 @@
+use anyhow::Result;
 use filetime::{FileTime, set_file_times};
 use pxs::pxs::sync::{self, SyncOptions};
 use pxs::pxs::tools;
@@ -9,7 +10,7 @@ use std::{
 use tempfile::tempdir;
 
 #[tokio::test]
-async fn test_incremental_sync_only_writes_changed_blocks() -> anyhow::Result<()> {
+async fn test_incremental_sync_only_writes_changed_blocks() -> Result<()> {
     let dir = tempdir()?;
     let src_path = dir.path().join("source.bin");
     let dst_path = dir.path().join("dest.bin");
@@ -61,7 +62,7 @@ async fn test_incremental_sync_only_writes_changed_blocks() -> anyhow::Result<()
 }
 
 #[tokio::test]
-async fn test_sync_dir_recursive() -> anyhow::Result<()> {
+async fn test_sync_dir_recursive() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src_dir");
     let dst_dir = dir.path().join("dst_dir");
@@ -83,7 +84,7 @@ async fn test_sync_dir_recursive() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_changed_blocks_rejects_symlinked_parent_destination() -> anyhow::Result<()> {
+async fn test_sync_changed_blocks_rejects_symlinked_parent_destination() -> Result<()> {
     let dir = tempdir()?;
     let src_path = dir.path().join("source.txt");
     let dst_root = dir.path().join("dst");
@@ -112,7 +113,7 @@ async fn test_sync_changed_blocks_rejects_symlinked_parent_destination() -> anyh
 }
 
 #[tokio::test]
-async fn test_sync_dir_rejects_symlinked_destination_root() -> anyhow::Result<()> {
+async fn test_sync_dir_rejects_symlinked_destination_root() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let external_dir = tempdir()?;
@@ -138,7 +139,7 @@ async fn test_sync_dir_rejects_symlinked_destination_root() -> anyhow::Result<()
 }
 
 #[tokio::test]
-async fn test_metadata_skip_logic() -> anyhow::Result<()> {
+async fn test_metadata_skip_logic() -> Result<()> {
     let dir = tempdir()?;
     let src_path = dir.path().join("src.txt");
     let dst_path = dir.path().join("dst.txt");
@@ -155,7 +156,7 @@ async fn test_metadata_skip_logic() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_metadata_skip_uses_nanosecond_precision() -> anyhow::Result<()> {
+async fn test_metadata_skip_uses_nanosecond_precision() -> Result<()> {
     let dir = tempdir()?;
     let src_path = dir.path().join("src.txt");
     let dst_path = dir.path().join("dst.txt");
@@ -179,7 +180,7 @@ async fn test_metadata_skip_uses_nanosecond_precision() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_threshold_full_copy_decision() -> anyhow::Result<()> {
+async fn test_threshold_full_copy_decision() -> Result<()> {
     let dir = tempdir()?;
     let src_path = dir.path().join("src.bin");
     let dst_path = dir.path().join("dst.bin");
@@ -197,7 +198,7 @@ async fn test_threshold_full_copy_decision() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_symlink_over_directory() -> anyhow::Result<()> {
+async fn test_symlink_over_directory() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -226,7 +227,7 @@ async fn test_symlink_over_directory() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_file_replaces_directory() -> anyhow::Result<()> {
+async fn test_file_replaces_directory() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -247,7 +248,7 @@ async fn test_file_replaces_directory() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_directory_replaces_file() -> anyhow::Result<()> {
+async fn test_directory_replaces_file() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -272,7 +273,7 @@ async fn test_directory_replaces_file() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_dir_root_is_file() -> anyhow::Result<()> {
+async fn test_sync_dir_root_is_file() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_root = dir.path().join("dst");
@@ -292,7 +293,7 @@ async fn test_sync_dir_root_is_file() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_dir_with_delete() -> anyhow::Result<()> {
+async fn test_sync_dir_with_delete() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -321,7 +322,7 @@ async fn test_sync_dir_with_delete() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_dir_with_delete_and_ignore() -> anyhow::Result<()> {
+async fn test_sync_dir_with_delete_and_ignore() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -353,7 +354,7 @@ async fn test_sync_dir_with_delete_and_ignore() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_with_checksum_force() -> anyhow::Result<()> {
+async fn test_sync_with_checksum_force() -> Result<()> {
     let dir = tempdir()?;
     let src_path = dir.path().join("src.txt");
     let dst_path = dir.path().join("dst.txt");
@@ -382,7 +383,7 @@ async fn test_sync_with_checksum_force() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_subcommand_with_checksum_updates_matching_metadata_file() -> anyhow::Result<()> {
+async fn test_sync_subcommand_with_checksum_updates_matching_metadata_file() -> Result<()> {
     let dir = tempdir()?;
     let src_path = dir.path().join("src.bin");
     let dst_path = dir.path().join("dst.bin");
@@ -419,7 +420,7 @@ async fn test_sync_subcommand_with_checksum_updates_matching_metadata_file() -> 
 }
 
 #[tokio::test]
-async fn test_sync_dry_run_safety() -> anyhow::Result<()> {
+async fn test_sync_dry_run_safety() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -448,7 +449,7 @@ async fn test_sync_dry_run_safety() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_with_exclude_from_file() -> anyhow::Result<()> {
+async fn test_sync_with_exclude_from_file() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -473,7 +474,7 @@ async fn test_sync_with_exclude_from_file() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_broken_symlink_at_destination() -> anyhow::Result<()> {
+async fn test_sync_broken_symlink_at_destination() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -503,7 +504,7 @@ async fn test_sync_broken_symlink_at_destination() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_source_broken_symlink() -> anyhow::Result<()> {
+async fn test_sync_source_broken_symlink() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -531,7 +532,7 @@ async fn test_sync_source_broken_symlink() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_delete_preserves_broken_symlink_match() -> anyhow::Result<()> {
+async fn test_sync_delete_preserves_broken_symlink_match() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -561,7 +562,7 @@ async fn test_sync_delete_preserves_broken_symlink_match() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-async fn test_sync_replace_symlink_dir_with_real_dir() -> anyhow::Result<()> {
+async fn test_sync_replace_symlink_dir_with_real_dir() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -593,7 +594,7 @@ async fn test_sync_replace_symlink_dir_with_real_dir() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_quiet_mode_smoke() -> anyhow::Result<()> {
+async fn test_sync_quiet_mode_smoke() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -610,7 +611,7 @@ async fn test_sync_quiet_mode_smoke() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[cfg(unix)]
-async fn test_sync_skips_fifo_without_failing() -> anyhow::Result<()> {
+async fn test_sync_skips_fifo_without_failing() -> Result<()> {
     use nix::sys::stat::Mode;
     use nix::unistd::mkfifo;
 
@@ -634,7 +635,7 @@ async fn test_sync_skips_fifo_without_failing() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[cfg(unix)]
-async fn test_sync_skips_unix_socket_without_failing() -> anyhow::Result<()> {
+async fn test_sync_skips_unix_socket_without_failing() -> Result<()> {
     use std::os::unix::net::UnixListener;
 
     let dir = tempdir()?;
@@ -657,7 +658,7 @@ async fn test_sync_skips_unix_socket_without_failing() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
-async fn test_sync_non_utf8_filename() -> anyhow::Result<()> {
+async fn test_sync_non_utf8_filename() -> Result<()> {
     use std::os::unix::ffi::OsStringExt;
 
     let dir = tempdir()?;
@@ -681,7 +682,7 @@ async fn test_sync_non_utf8_filename() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_staged_file_cleanup_on_error() -> anyhow::Result<()> {
+async fn test_sync_staged_file_cleanup_on_error() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");
@@ -713,7 +714,7 @@ async fn test_sync_staged_file_cleanup_on_error() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_sync_stats_aggregation() -> anyhow::Result<()> {
+async fn test_sync_stats_aggregation() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     let dst_dir = dir.path().join("dst");

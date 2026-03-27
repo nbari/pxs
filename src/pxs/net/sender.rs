@@ -15,6 +15,7 @@ use super::{
     tasks::{SyncTask, collect_sync_tasks, source_path_for},
 };
 use crate::pxs::tools;
+use anyhow::Result;
 use futures_util::SinkExt;
 use indicatif::ProgressBar;
 use std::{os::unix::fs::FileExt, path::Path, sync::Arc};
@@ -82,7 +83,7 @@ pub async fn run_sender_listener(
     threshold: f32,
     checksum: bool,
     ignores: &[String],
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("Sender listener listening on {addr}");
     let defaults = ServeRequestDefaults {
@@ -125,7 +126,7 @@ fn default_pull_request(defaults: &ServeRequestDefaults) -> PullRequestOptions {
 async fn receive_pull_request<T>(
     framed: &mut Framed<T, PxsCodec>,
     defaults: &ServeRequestDefaults,
-) -> anyhow::Result<PullRequestOptions>
+) -> Result<PullRequestOptions>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -151,9 +152,7 @@ where
     }
 }
 
-fn acquire_control_session(
-    control_session_gate: &Arc<Semaphore>,
-) -> anyhow::Result<OwnedSemaphorePermit> {
+fn acquire_control_session(control_session_gate: &Arc<Semaphore>) -> Result<OwnedSemaphorePermit> {
     Arc::clone(control_session_gate)
         .try_acquire_owned()
         .map_err(|_| anyhow::anyhow!("another sync session is already active for this root"))
@@ -164,7 +163,7 @@ async fn serve_client_session<T>(
     src_root: &Path,
     defaults: ServeRequestDefaults,
     control_session_gate: Arc<Semaphore>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -216,7 +215,7 @@ pub async fn run_sender(
     checksum: bool,
     fsync: bool,
     ignores: &[String],
-) -> anyhow::Result<()> {
+) -> Result<()> {
     run_sender_with_options(addr, src_root, threshold, checksum, fsync, ignores, None).await
 }
 
@@ -233,7 +232,7 @@ pub async fn run_sender_with_options(
     fsync: bool,
     ignores: &[String],
     large_file_parallel: Option<LargeFileParallelOptions>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     run_sender_with_features(
         addr,
         src_root,
@@ -261,7 +260,7 @@ pub async fn run_sender_with_features(
     addr: &str,
     src_root: &Path,
     options: RemoteSyncOptions<'_>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     anyhow::ensure!(
         !options.features.delete || src_root.is_dir(),
         "--delete is only supported when syncing directories"
@@ -316,7 +315,7 @@ pub async fn run_stdio_sender(
     delete: bool,
     ignores: &[String],
     quiet: bool,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     anyhow::ensure!(
         !delete || src_root.is_dir(),
         "--delete is only supported when syncing directories"
@@ -361,7 +360,7 @@ pub async fn run_ssh_sender(
     src_root: &Path,
     dst_path: &str,
     options: RemoteSyncOptions<'_>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     anyhow::ensure!(
         !options.features.delete || src_root.is_dir(),
         "--delete is only supported when syncing directories"
@@ -409,7 +408,7 @@ async fn sender_handshake<T>(
     framed: &mut Framed<T, PxsCodec>,
     allow_lz4: bool,
     allow_large_file_parallel: bool,
-) -> anyhow::Result<TransportFeatures>
+) -> Result<TransportFeatures>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -435,7 +434,7 @@ async fn send_push_session_options<T>(
     delete: bool,
     path: Option<&str>,
     single_file_name: Option<String>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -454,7 +453,7 @@ where
     Ok(())
 }
 
-fn session_single_file_name(src_root: &Path) -> anyhow::Result<Option<String>> {
+fn session_single_file_name(src_root: &Path) -> Result<Option<String>> {
     if !src_root.is_file() {
         return Ok(None);
     }
@@ -469,7 +468,7 @@ async fn send_parallel_transfer_config<T>(
     framed: &mut Framed<T, PxsCodec>,
     config: Option<ParallelSenderOptions>,
     features: TransportFeatures,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -489,7 +488,7 @@ where
     Ok(())
 }
 
-async fn finish_control_connection<T>(framed: &mut Framed<T, PxsCodec>) -> anyhow::Result<()>
+async fn finish_control_connection<T>(framed: &mut Framed<T, PxsCodec>) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -513,7 +512,7 @@ async fn sender_loop<T>(
     options: SenderLoopOptions,
     tasks: &[SyncTask],
     progress: Arc<ProgressBar>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -533,7 +532,7 @@ async fn sender_transfer_loop<T>(
     tasks: &[SyncTask],
     progress: Arc<ProgressBar>,
     features: TransportFeatures,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -605,7 +604,7 @@ async fn send_sync_file_message<T>(
     metadata: FileMetadata,
     threshold: f32,
     checksum: bool,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -627,10 +626,7 @@ struct SourceReadContext {
     len: usize,
 }
 
-fn mapped_source_chunk(
-    source_reader: &SourceReadContext,
-    offset: u64,
-) -> anyhow::Result<Option<&[u8]>> {
+fn mapped_source_chunk(source_reader: &SourceReadContext, offset: u64) -> Result<Option<&[u8]>> {
     let Some(mmap) = source_reader.mmap.as_ref() else {
         return Ok(None);
     };
@@ -650,7 +646,7 @@ fn mapped_source_chunk(
     Ok(chunk)
 }
 
-async fn open_source_read_context(path: &Path) -> anyhow::Result<Arc<SourceReadContext>> {
+async fn open_source_read_context(path: &Path) -> Result<Arc<SourceReadContext>> {
     let path = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let file = std::fs::File::open(&path)?;
@@ -665,7 +661,7 @@ async fn open_source_read_context(path: &Path) -> anyhow::Result<Arc<SourceReadC
 async fn ensure_source_read_context(
     source_reader: &mut Option<Arc<SourceReadContext>>,
     path: &Path,
-) -> anyhow::Result<Arc<SourceReadContext>> {
+) -> Result<Arc<SourceReadContext>> {
     if let Some(source_reader) = source_reader {
         return Ok(Arc::clone(source_reader));
     }
@@ -679,7 +675,7 @@ async fn read_block_range(
     source_reader: Arc<SourceReadContext>,
     start_block: u64,
     end_block: u64,
-) -> anyhow::Result<Vec<Block>> {
+) -> Result<Vec<Block>> {
     tokio::task::spawn_blocking(move || {
         let mut blocks = Vec::with_capacity(
             usize::try_from(end_block - start_block).map_err(|e| anyhow::anyhow!(e))?,
@@ -708,7 +704,7 @@ async fn read_block_range(
 async fn read_requested_blocks(
     source_reader: Arc<SourceReadContext>,
     indices: Vec<u32>,
-) -> anyhow::Result<Vec<Block>> {
+) -> Result<Vec<Block>> {
     tokio::task::spawn_blocking(move || {
         let mut blocks = Vec::with_capacity(indices.len());
         let mut buffer = vec![0_u8; BLOCK_SIZE_USIZE];
@@ -738,7 +734,7 @@ async fn send_block_batch<T>(
     blocks: Vec<Block>,
     progress: &Arc<ProgressBar>,
     features: TransportFeatures,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -772,7 +768,7 @@ async fn send_apply_metadata<T>(
     framed: &mut Framed<T, PxsCodec>,
     rel_path: &str,
     metadata: FileMetadata,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -827,7 +823,7 @@ fn build_parallel_index_batches(indices: Vec<u32>, worker_count: usize) -> Vec<V
         .collect()
 }
 
-async fn finish_worker_connection<T>(framed: &mut Framed<T, PxsCodec>) -> anyhow::Result<()>
+async fn finish_worker_connection<T>(framed: &mut Framed<T, PxsCodec>) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -852,7 +848,7 @@ async fn send_full_copy_range<T>(
     end_block: u64,
     progress: &Arc<ProgressBar>,
     features: TransportFeatures,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -900,7 +896,7 @@ async fn send_requested_block_batches<T>(
     indices: Vec<u32>,
     progress: &Arc<ProgressBar>,
     features: TransportFeatures,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -916,7 +912,7 @@ async fn open_tcp_chunk_writer_connection(
     addr: &str,
     transfer_id: &str,
     rel_path: &str,
-) -> anyhow::Result<Framed<TcpStream, PxsCodec>> {
+) -> Result<Framed<TcpStream, PxsCodec>> {
     let stream = connect_with_retry(addr).await?;
     let mut framed = Framed::new(stream, PxsCodec);
     let _features = sender_handshake(&mut framed, false, false).await?;
@@ -937,7 +933,7 @@ async fn run_tcp_parallel_full_copy_workers(
     progress: &Arc<ProgressBar>,
     source_reader: Arc<SourceReadContext>,
     worker_count: usize,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let total_blocks = metadata.size.div_ceil(BLOCK_SIZE);
     let ranges = build_parallel_block_ranges(total_blocks, worker_count);
     let mut workers = Vec::with_capacity(ranges.len());
@@ -980,7 +976,7 @@ async fn run_tcp_parallel_block_workers(
     progress: &Arc<ProgressBar>,
     source_reader: Arc<SourceReadContext>,
     worker_count: usize,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let batches = build_parallel_index_batches(indices, worker_count);
     let mut workers = Vec::with_capacity(batches.len());
 
@@ -1020,7 +1016,7 @@ async fn run_ssh_parallel_full_copy_workers(
     metadata: FileMetadata,
     progress: &Arc<ProgressBar>,
     source_reader: Arc<SourceReadContext>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let total_blocks = metadata.size.div_ceil(BLOCK_SIZE);
     let ParallelWorkerTransport::Ssh { addr, dst_path } = &options.transport else {
         anyhow::bail!("parallel SSH worker requested for non-SSH transport");
@@ -1071,7 +1067,7 @@ async fn run_ssh_parallel_block_workers(
     indices: Vec<u32>,
     progress: &Arc<ProgressBar>,
     source_reader: Arc<SourceReadContext>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let ParallelWorkerTransport::Ssh { addr, dst_path } = &options.transport else {
         anyhow::bail!("parallel SSH worker requested for non-SSH transport");
     };
@@ -1120,7 +1116,7 @@ async fn handle_request_full_copy_message<T>(
     metadata: FileMetadata,
     progress: &Arc<ProgressBar>,
     features: TransportFeatures,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1171,7 +1167,7 @@ async fn handle_request_hashes_message<T>(
     framed: &mut Framed<T, PxsCodec>,
     rel_path: &str,
     source_reader: Arc<SourceReadContext>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1200,7 +1196,7 @@ async fn handle_request_blocks_message<T>(
     indices: Vec<u32>,
     progress: &Arc<ProgressBar>,
     features: TransportFeatures,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1235,7 +1231,7 @@ struct RemoteFileContext<'a> {
 }
 
 impl RemoteFileContext<'_> {
-    fn ensure_expected_path(&self, received_path: &str) -> anyhow::Result<()> {
+    fn ensure_expected_path(&self, received_path: &str) -> Result<()> {
         ensure_expected_protocol_path(&self.rel_path, received_path)
     }
 }
@@ -1243,7 +1239,7 @@ impl RemoteFileContext<'_> {
 fn ensure_parallel_options(
     parallel_options: Option<ParallelSenderOptions>,
     transfer_kind: &str,
-) -> anyhow::Result<ParallelSenderOptions> {
+) -> Result<ParallelSenderOptions> {
     parallel_options.ok_or_else(|| {
         anyhow::anyhow!(
             "remote requested parallel {transfer_kind} transfer but large-file parallelism is not configured"
@@ -1258,7 +1254,7 @@ async fn handle_parallel_full_copy_request<T>(
     progress: &Arc<ProgressBar>,
     parallel_options: Option<ParallelSenderOptions>,
     transfer_id: String,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1300,7 +1296,7 @@ async fn handle_parallel_block_request<T>(
     parallel_options: Option<ParallelSenderOptions>,
     transfer_id: String,
     indices: Vec<u32>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1340,7 +1336,7 @@ async fn handle_request_full_copy_with_context<T>(
     source_reader: &mut Option<Arc<SourceReadContext>>,
     progress: &Arc<ProgressBar>,
     features: TransportFeatures,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1360,7 +1356,7 @@ async fn handle_request_hashes_with_context<T>(
     framed: &mut Framed<T, PxsCodec>,
     context: &RemoteFileContext<'_>,
     source_reader: &mut Option<Arc<SourceReadContext>>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1375,7 +1371,7 @@ async fn handle_request_blocks_with_context<T>(
     indices: Vec<u32>,
     progress: &Arc<ProgressBar>,
     features: TransportFeatures,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1396,7 +1392,7 @@ async fn handle_metadata_applied_with_context<T>(
     framed: &mut Framed<T, PxsCodec>,
     context: &RemoteFileContext<'_>,
     checksum: bool,
-) -> anyhow::Result<bool>
+) -> Result<bool>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1418,7 +1414,7 @@ async fn handle_end_of_file_with_context<T>(
     framed: &mut Framed<T, PxsCodec>,
     context: &RemoteFileContext<'_>,
     progress: &Arc<ProgressBar>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1437,7 +1433,7 @@ async fn handle_remote_file_request_message<T>(
     source_reader: &mut Option<Arc<SourceReadContext>>,
     message: &Message,
     options: &RemoteFileSyncOptions,
-) -> anyhow::Result<Option<RemoteFileMessageOutcome>>
+) -> Result<Option<RemoteFileMessageOutcome>>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1519,7 +1515,7 @@ async fn handle_remote_file_status_message<T>(
     context: &RemoteFileContext<'_>,
     message: &Message,
     options: &RemoteFileSyncOptions,
-) -> anyhow::Result<Option<RemoteFileMessageOutcome>>
+) -> Result<Option<RemoteFileMessageOutcome>>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1577,7 +1573,7 @@ pub async fn sync_remote_file<T>(
     threshold: f32,
     checksum: bool,
     progress: Arc<ProgressBar>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1601,7 +1597,7 @@ async fn sync_remote_file_with_features<T>(
     src_root: &Path,
     path: &Path,
     options: RemoteFileSyncOptions,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1649,13 +1645,14 @@ mod tests {
     use crate::pxs::net::protocol::deserialize_block_batch;
     use crate::pxs::net::shared::TransportFeatures;
     use crate::pxs::net::{Block, Message, PxsCodec, deserialize_message, serialize_message};
+    use anyhow::Result;
     use futures_util::{SinkExt, StreamExt};
     use indicatif::ProgressBar;
     use std::sync::Arc;
     use tokio_util::codec::Framed;
 
     #[tokio::test]
-    async fn test_sender_handshake_negotiates_lz4_with_capable_peer() -> anyhow::Result<()> {
+    async fn test_sender_handshake_negotiates_lz4_with_capable_peer() -> Result<()> {
         let (client, server) = tokio::io::duplex(4096);
         let mut sender_framed = Framed::new(client, PxsCodec);
         let mut peer_framed = Framed::new(server, PxsCodec);
@@ -1684,7 +1681,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_block_batch_uses_compressed_message_when_beneficial() -> anyhow::Result<()> {
+    async fn test_send_block_batch_uses_compressed_message_when_beneficial() -> Result<()> {
         let (client, server) = tokio::io::duplex(2 * 1024 * 1024);
         let mut sender_framed = Framed::new(client, PxsCodec);
         let mut receiver_framed = Framed::new(server, PxsCodec);
@@ -1736,7 +1733,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_block_batch_falls_back_without_lz4_negotiation() -> anyhow::Result<()> {
+    async fn test_send_block_batch_falls_back_without_lz4_negotiation() -> Result<()> {
         let (client, server) = tokio::io::duplex(2 * 1024 * 1024);
         let mut sender_framed = Framed::new(client, PxsCodec);
         let mut receiver_framed = Framed::new(server, PxsCodec);

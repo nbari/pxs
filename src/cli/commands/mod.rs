@@ -437,10 +437,11 @@ pub fn new() -> Command {
 #[cfg(test)]
 mod tests {
     use super::new;
+    use anyhow::Result;
     use tempfile::tempdir;
 
     #[test]
-    fn test_verbose_flag_counts_occurrences() -> anyhow::Result<()> {
+    fn test_verbose_flag_counts_occurrences() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         let dst = dir.path().join("dst.txt");
@@ -453,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn test_threshold_rejects_out_of_range_values() -> anyhow::Result<()> {
+    fn test_threshold_rejects_out_of_range_values() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         let dst = dir.path().join("dst.txt");
@@ -472,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn test_help_hides_internal_stdio_flags() -> anyhow::Result<()> {
+    fn test_help_hides_internal_stdio_flags() -> Result<()> {
         let mut help = Vec::new();
         new().write_long_help(&mut help)?;
         let help = String::from_utf8(help)?;
@@ -485,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn test_internal_stdio_mode_still_parses() -> anyhow::Result<()> {
+    fn test_internal_stdio_mode_still_parses() -> Result<()> {
         let matches =
             new().try_get_matches_from(["pxs", "--stdio", "--destination", ".", "--fsync"])?;
         assert!(matches.get_flag("stdio"));

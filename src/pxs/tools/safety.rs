@@ -1,3 +1,4 @@
+use anyhow::Result;
 use std::path::Path;
 
 /// Ensure that no existing ancestor of `path` is a symlink.
@@ -5,7 +6,7 @@ use std::path::Path;
 /// # Errors
 ///
 /// Returns an error if any existing ancestor is a symlink or metadata lookup fails.
-pub fn ensure_no_symlink_ancestors(path: &Path) -> anyhow::Result<()> {
+pub fn ensure_no_symlink_ancestors(path: &Path) -> Result<()> {
     let mut current = path.parent();
     while let Some(parent) = current {
         match std::fs::symlink_metadata(parent) {
@@ -30,7 +31,7 @@ pub fn ensure_no_symlink_ancestors(path: &Path) -> anyhow::Result<()> {
 ///
 /// Returns an error if `path` is not under `root`, any existing ancestor below
 /// `root` is a symlink, or metadata lookup fails.
-pub fn ensure_no_symlink_ancestors_under_root(root: &Path, path: &Path) -> anyhow::Result<()> {
+pub fn ensure_no_symlink_ancestors_under_root(root: &Path, path: &Path) -> Result<()> {
     ensure_no_symlink_ancestors(root)?;
     match std::fs::symlink_metadata(root) {
         Ok(meta) => {

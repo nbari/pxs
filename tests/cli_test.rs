@@ -1,3 +1,4 @@
+use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use pxs::pxs::net::{self, Message};
 use std::process::{Command, Output};
@@ -5,7 +6,7 @@ use tempfile::tempdir;
 use tokio::net::TcpListener;
 use tokio_util::codec::Framed;
 
-fn run_pxs(args: &[&str]) -> anyhow::Result<Output> {
+fn run_pxs(args: &[&str]) -> Result<Output> {
     Command::new(env!("CARGO_BIN_EXE_pxs"))
         .args(args)
         .output()
@@ -17,7 +18,7 @@ fn stderr_text(output: &Output) -> String {
 }
 
 #[test]
-fn test_pull_stdio_reports_unsupported_mode() -> anyhow::Result<()> {
+fn test_pull_stdio_reports_unsupported_mode() -> Result<()> {
     let dir = tempdir()?;
     let dst_arg = dir.path().join("dst").to_string_lossy().to_string();
     let output = run_pxs(&["pull", "-", &dst_arg])?;
@@ -28,7 +29,7 @@ fn test_pull_stdio_reports_unsupported_mode() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_pull_tcp_source_flags_attempts_connection() -> anyhow::Result<()> {
+fn test_pull_tcp_source_flags_attempts_connection() -> Result<()> {
     let dir = tempdir()?;
     let dst_arg = dir.path().join("dst").to_string_lossy().to_string();
     let output = run_pxs(&["pull", "127.0.0.1:9999", &dst_arg, "--checksum"])?;
@@ -39,7 +40,7 @@ fn test_pull_tcp_source_flags_attempts_connection() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_pull_tcp_delete_attempts_connection() -> anyhow::Result<()> {
+fn test_pull_tcp_delete_attempts_connection() -> Result<()> {
     let dir = tempdir()?;
     let dst_arg = dir.path().join("dst").to_string_lossy().to_string();
     let output = run_pxs(&["pull", "127.0.0.1:9999", &dst_arg, "--delete"])?;
@@ -50,7 +51,7 @@ fn test_pull_tcp_delete_attempts_connection() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_push_reports_malformed_bracketed_endpoint() -> anyhow::Result<()> {
+fn test_push_reports_malformed_bracketed_endpoint() -> Result<()> {
     let dir = tempdir()?;
     let src = dir.path().join("src.txt");
     std::fs::write(&src, "content")?;
@@ -63,7 +64,7 @@ fn test_push_reports_malformed_bracketed_endpoint() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_push_reports_missing_source_path() -> anyhow::Result<()> {
+fn test_push_reports_missing_source_path() -> Result<()> {
     let dir = tempdir()?;
     let src_arg = dir.path().join("missing.txt").to_string_lossy().to_string();
     let output = run_pxs(&["push", &src_arg, "127.0.0.1:9999"])?;
@@ -74,7 +75,7 @@ fn test_push_reports_missing_source_path() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_push_stdio_delete_reports_actionable_error() -> anyhow::Result<()> {
+fn test_push_stdio_delete_reports_actionable_error() -> Result<()> {
     let dir = tempdir()?;
     let src_dir = dir.path().join("src");
     std::fs::create_dir_all(&src_dir)?;
@@ -87,7 +88,7 @@ fn test_push_stdio_delete_reports_actionable_error() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_verbose_flag_enables_debug_output() -> anyhow::Result<()> {
+fn test_verbose_flag_enables_debug_output() -> Result<()> {
     let dir = tempdir()?;
     let src = dir.path().join("src.txt");
     let dst = dir.path().join("dst.txt");
@@ -103,8 +104,50 @@ fn test_verbose_flag_enables_debug_output() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_sync_local_file_end_to_end() -> Result<()> {
+    let dir = tempdir()?;
+    let src = dir.path().join("src.txt");
+    let dst = dir.path().join("dst.txt");
+    std::fs::write(&src, "local file payload")?;
+
+    let src_arg = src.to_string_lossy().to_string();
+    let dst_arg = dst.to_string_lossy().to_string();
+    let output = run_pxs(&["sync", &dst_arg, &src_arg, "--quiet"])?;
+
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert_eq!(std::fs::read_to_string(&dst)?, "local file payload");
+    Ok(())
+}
+
+#[test]
+fn test_sync_local_directory_delete_end_to_end() -> Result<()> {
+    let dir = tempdir()?;
+    let src = dir.path().join("src");
+    let dst = dir.path().join("dst");
+    std::fs::create_dir_all(src.join("nested"))?;
+    std::fs::create_dir_all(dst.join("stale/subdir"))?;
+    std::fs::write(src.join("keep.txt"), "fresh")?;
+    std::fs::write(src.join("nested/keep.txt"), "nested-fresh")?;
+    std::fs::write(dst.join("keep.txt"), "stale-content")?;
+    std::fs::write(dst.join("stale/subdir/old.txt"), "obsolete")?;
+
+    let src_arg = src.to_string_lossy().to_string();
+    let dst_arg = dst.to_string_lossy().to_string();
+    let output = run_pxs(&["sync", &dst_arg, &src_arg, "--delete", "--quiet"])?;
+
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert_eq!(std::fs::read_to_string(dst.join("keep.txt"))?, "fresh");
+    assert_eq!(
+        std::fs::read_to_string(dst.join("nested/keep.txt"))?,
+        "nested-fresh"
+    );
+    assert!(!dst.join("stale").exists());
+    Ok(())
+}
+
 #[tokio::test]
-async fn test_push_reports_incompatible_peer_version() -> anyhow::Result<()> {
+async fn test_push_reports_incompatible_peer_version() -> Result<()> {
     let dir = tempdir()?;
     let src = dir.path().join("src.txt");
     std::fs::write(&src, "content")?;

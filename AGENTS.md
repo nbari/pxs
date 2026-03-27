@@ -34,6 +34,7 @@
 - All production code should have documentation. Document public modules, types, functions, constants, and any non-obvious internal logic that would otherwise be hard to maintain safely.
 - Rust 2024 edition; defaults to `rustfmt`.
 - Clippy is strict (`all` + `pedantic` deny). Avoid `unwrap`, `expect`, and panics; prefer `?` and typed errors.
+- When using `anyhow`, import `anyhow::Result` (and `Context` when needed) at the top of the file and use plain `Result<T>` in signatures instead of fully-qualified `anyhow::Result<T>`.
 - Do not add `#[allow(...)]` in production code; only acceptable inside test modules when needed.
 - File/module names `snake_case`; types `UpperCamelCase`; constants `SCREAMING_SNAKE_CASE`.
 - Group imports from the same crate/namespace (for example, `use std::{...};`) rather than many single-line imports.

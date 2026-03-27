@@ -1,7 +1,8 @@
 use crate::pxs::tools;
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-pub(crate) fn validate_protocol_path(path: &str) -> anyhow::Result<()> {
+pub(crate) fn validate_protocol_path(path: &str) -> Result<()> {
     anyhow::ensure!(!path.is_empty(), "protocol path must not be empty");
     anyhow::ensure!(
         !path.starts_with('/'),
@@ -26,7 +27,7 @@ pub(crate) fn validate_protocol_path(path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn resolve_protocol_path(root: &Path, path: &str) -> anyhow::Result<PathBuf> {
+pub(crate) fn resolve_protocol_path(root: &Path, path: &str) -> Result<PathBuf> {
     validate_protocol_path(path)?;
 
     let mut full_path = root.to_path_buf();
@@ -37,13 +38,13 @@ pub(crate) fn resolve_protocol_path(root: &Path, path: &str) -> anyhow::Result<P
     Ok(full_path)
 }
 
-pub(crate) fn resolve_requested_root(root: &Path, requested: &str) -> anyhow::Result<PathBuf> {
+pub(crate) fn resolve_requested_root(root: &Path, requested: &str) -> Result<PathBuf> {
     let relative = requested.trim_start_matches('/');
     validate_protocol_path(relative)?;
     resolve_protocol_path(root, relative)
 }
 
-pub(crate) fn ensure_expected_protocol_path(expected: &str, received: &str) -> anyhow::Result<()> {
+pub(crate) fn ensure_expected_protocol_path(expected: &str, received: &str) -> Result<()> {
     validate_protocol_path(received)?;
     anyhow::ensure!(
         expected == received,
@@ -52,7 +53,7 @@ pub(crate) fn ensure_expected_protocol_path(expected: &str, received: &str) -> a
     Ok(())
 }
 
-pub(crate) fn relative_protocol_path(src_root: &Path, path: &Path) -> anyhow::Result<String> {
+pub(crate) fn relative_protocol_path(src_root: &Path, path: &Path) -> Result<String> {
     let rel_path = if src_root.is_file() {
         path.file_name()
             .map(|name| name.to_string_lossy().to_string())

@@ -2,6 +2,7 @@ use super::{
     BLOCK_SIZE, IDLE_TIMEOUT_SECS,
     protocol::{Block, FileMetadata},
 };
+use anyhow::Result;
 use futures_util::StreamExt;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -21,7 +22,7 @@ pub(crate) struct TransportFeatures {
     pub(crate) large_file_parallel: bool,
 }
 
-pub(crate) async fn connect_with_retry(addr: &str) -> anyhow::Result<TcpStream> {
+pub(crate) async fn connect_with_retry(addr: &str) -> Result<TcpStream> {
     let mut last_error = None;
 
     for attempt in 0..MAX_RETRIES {
@@ -60,7 +61,7 @@ fn parse_protocol_version(version: &str) -> Option<(&str, &str)> {
 ///
 /// The wire format is tied to the crate version for now, so pre-1.0 releases
 /// require a matching major/minor pair.
-pub(crate) fn validate_peer_version(version: &str) -> anyhow::Result<()> {
+pub(crate) fn validate_peer_version(version: &str) -> Result<()> {
     let Some((major, minor)) = parse_protocol_version(version) else {
         anyhow::bail!("invalid peer version format: {version}");
     };
@@ -120,7 +121,7 @@ pub(crate) fn negotiate_transport_features(
     peer_version: &str,
     allow_lz4: bool,
     allow_large_file_parallel: bool,
-) -> anyhow::Result<TransportFeatures> {
+) -> Result<TransportFeatures> {
     validate_peer_version(peer_version)?;
     let peer_features = parse_peer_capabilities(peer_version);
     Ok(TransportFeatures {
@@ -130,9 +131,7 @@ pub(crate) fn negotiate_transport_features(
 }
 
 /// Read next frame with idle timeout.
-pub(crate) async fn recv_with_timeout<T, C>(
-    framed: &mut Framed<T, C>,
-) -> anyhow::Result<Option<Vec<u8>>>
+pub(crate) async fn recv_with_timeout<T, C>(framed: &mut Framed<T, C>) -> Result<Option<Vec<u8>>>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     C: tokio_util::codec::Decoder<Item = Vec<u8>, Error = anyhow::Error>,
@@ -143,7 +142,7 @@ where
 async fn recv_with_timeout_for<T, C>(
     framed: &mut Framed<T, C>,
     timeout: Duration,
-) -> anyhow::Result<Option<Vec<u8>>>
+) -> Result<Option<Vec<u8>>>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     C: tokio_util::codec::Decoder<Item = Vec<u8>, Error = anyhow::Error>,
@@ -169,7 +168,7 @@ pub(crate) fn skipped_bytes(metadata: FileMetadata, requested: &[u32]) -> u64 {
     metadata.size.saturating_sub(requested_bytes)
 }
 
-pub(crate) fn block_bytes(blocks: &[Block]) -> anyhow::Result<u64> {
+pub(crate) fn block_bytes(blocks: &[Block]) -> Result<u64> {
     blocks.iter().try_fold(0_u64, |total, block| {
         let block_len = u64::try_from(block.data.len()).map_err(|e| anyhow::anyhow!(e))?;
         total
@@ -185,11 +184,12 @@ mod tests {
         recv_with_timeout_for,
     };
     use crate::pxs::net::PxsCodec;
+    use anyhow::Result;
     use std::time::Duration;
     use tokio_util::codec::Framed;
 
     #[tokio::test]
-    async fn test_recv_with_timeout_for_errors_on_idle_stream() -> anyhow::Result<()> {
+    async fn test_recv_with_timeout_for_errors_on_idle_stream() -> Result<()> {
         let (_writer, reader) = tokio::io::duplex(64);
         let mut framed = Framed::new(reader, PxsCodec);
 
@@ -208,8 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn test_negotiate_transport_features_enables_lz4_when_both_peers_support_it()
-    -> anyhow::Result<()> {
+    fn test_negotiate_transport_features_enables_lz4_when_both_peers_support_it() -> Result<()> {
         let features = negotiate_transport_features(
             &format!("{}+caps=lz4-blocks", env!("CARGO_PKG_VERSION")),
             true,
@@ -226,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn test_negotiate_transport_features_disables_lz4_without_peer_support() -> anyhow::Result<()> {
+    fn test_negotiate_transport_features_disables_lz4_without_peer_support() -> Result<()> {
         let features = negotiate_transport_features(env!("CARGO_PKG_VERSION"), true, false)?;
         assert_eq!(features, TransportFeatures::default());
         Ok(())
@@ -234,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_negotiate_transport_features_enables_large_file_parallel_when_both_peers_support_it()
-    -> anyhow::Result<()> {
+    -> Result<()> {
         let features = negotiate_transport_features(
             &format!("{}+caps=large-file-parallel", env!("CARGO_PKG_VERSION")),
             false,

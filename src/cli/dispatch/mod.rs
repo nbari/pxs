@@ -1,4 +1,5 @@
 use crate::cli::actions::{Action, RemoteEndpoint, SyncOperand};
+use anyhow::Result;
 use clap::ArgMatches;
 use std::path::{Path, PathBuf};
 
@@ -11,7 +12,7 @@ const PUBLIC_USAGE_HINT: &str = "public CLI now uses subcommands. Examples: \
 /// # Errors
 ///
 /// Returns an error if the parsed CLI arguments do not form a valid action.
-pub fn handler(matches: &ArgMatches) -> anyhow::Result<Action> {
+pub fn handler(matches: &ArgMatches) -> Result<Action> {
     let quiet = matches.get_flag("quiet");
 
     if matches.get_flag("stdio") {
@@ -50,14 +51,14 @@ fn parse_ignores(matches: &ArgMatches) -> Vec<String> {
     ignores
 }
 
-fn required_path(matches: &ArgMatches, id: &str) -> anyhow::Result<PathBuf> {
+fn required_path(matches: &ArgMatches, id: &str) -> Result<PathBuf> {
     matches
         .get_one::<PathBuf>(id)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("missing required path argument: {id}"))
 }
 
-fn required_string(matches: &ArgMatches, id: &str) -> anyhow::Result<String> {
+fn required_string(matches: &ArgMatches, id: &str) -> Result<String> {
     matches
         .get_one::<String>(id)
         .cloned()
@@ -68,7 +69,7 @@ fn threshold(matches: &ArgMatches) -> f32 {
     *matches.get_one::<f32>("threshold").unwrap_or(&0.5)
 }
 
-fn parse_remote_endpoint(endpoint: &str, allow_stdio: bool) -> anyhow::Result<RemoteEndpoint> {
+fn parse_remote_endpoint(endpoint: &str, allow_stdio: bool) -> Result<RemoteEndpoint> {
     if allow_stdio && endpoint == "-" {
         return Ok(RemoteEndpoint::Stdio);
     }
@@ -90,12 +91,12 @@ fn parse_remote_endpoint(endpoint: &str, allow_stdio: bool) -> anyhow::Result<Re
     anyhow::bail!("unsupported remote endpoint syntax: {endpoint}")
 }
 
-fn validate_local_source_operand(path: &Path) -> anyhow::Result<()> {
+fn validate_local_source_operand(path: &Path) -> Result<()> {
     anyhow::ensure!(path.exists(), "Path does not exist: '{}'", path.display());
     Ok(())
 }
 
-fn validate_local_destination_operand(path: &Path) -> anyhow::Result<()> {
+fn validate_local_destination_operand(path: &Path) -> Result<()> {
     if path.exists() && path.is_dir() {
         return Ok(());
     }
@@ -118,7 +119,7 @@ fn validate_local_destination_operand(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_sync_operand(value: &str) -> anyhow::Result<SyncOperand> {
+fn parse_sync_operand(value: &str) -> Result<SyncOperand> {
     if value.contains('@') {
         return Ok(SyncOperand::Remote(parse_remote_endpoint(value, false)?));
     }
@@ -139,7 +140,7 @@ fn build_sync_action(
     dst: SyncOperand,
     matches: &ArgMatches,
     quiet: bool,
-) -> anyhow::Result<Action> {
+) -> Result<Action> {
     let dry_run = matches
         .try_get_one::<bool>("dry_run")
         .ok()
@@ -190,7 +191,7 @@ fn build_sync_action(
     })
 }
 
-fn handle_sync(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
+fn handle_sync(matches: &ArgMatches, quiet: bool) -> Result<Action> {
     let dst_text = required_string(matches, "dst")?;
     let src_text = required_string(matches, "src")?;
     let src = parse_sync_operand(&src_text)?;
@@ -205,7 +206,7 @@ fn handle_sync(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
     build_sync_action(src, dst, matches, quiet)
 }
 
-fn handle_push(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
+fn handle_push(matches: &ArgMatches, quiet: bool) -> Result<Action> {
     let src = required_path(matches, "src")?;
     let endpoint = parse_remote_endpoint(&required_string(matches, "endpoint")?, true)?;
     build_sync_action(
@@ -216,7 +217,7 @@ fn handle_push(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
     )
 }
 
-fn handle_pull(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
+fn handle_pull(matches: &ArgMatches, quiet: bool) -> Result<Action> {
     let endpoint_text = required_string(matches, "endpoint")?;
     let endpoint = parse_remote_endpoint(&endpoint_text, false)?;
     let threshold = threshold(matches);
@@ -239,7 +240,7 @@ fn handle_pull(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
     )
 }
 
-fn handle_listen(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
+fn handle_listen(matches: &ArgMatches, quiet: bool) -> Result<Action> {
     Ok(Action::Listen {
         addr: required_string(matches, "addr")?,
         dst: required_path(matches, "dst")?,
@@ -248,7 +249,7 @@ fn handle_listen(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
     })
 }
 
-fn handle_serve(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
+fn handle_serve(matches: &ArgMatches, quiet: bool) -> Result<Action> {
     Ok(Action::Serve {
         addr: required_string(matches, "addr")?,
         src: required_path(matches, "src")?,
@@ -259,7 +260,7 @@ fn handle_serve(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
     })
 }
 
-fn handle_internal_stdio(matches: &ArgMatches, quiet: bool) -> anyhow::Result<Action> {
+fn handle_internal_stdio(matches: &ArgMatches, quiet: bool) -> Result<Action> {
     let threshold = threshold(matches);
     let checksum = matches.get_flag("checksum");
     let quiet = quiet || matches.get_flag("quiet");
@@ -302,7 +303,7 @@ struct TcpInfo {
     path: Option<String>,
 }
 
-fn split_endpoint_host_suffix(endpoint: &str) -> anyhow::Result<Option<(&str, &str)>> {
+fn split_endpoint_host_suffix(endpoint: &str) -> Result<Option<(&str, &str)>> {
     let mut bracket_depth = 0_u8;
     let mut first_colon = None;
 
@@ -357,7 +358,7 @@ fn split_endpoint_host_suffix(endpoint: &str) -> anyhow::Result<Option<(&str, &s
     Ok(None)
 }
 
-fn parse_ssh_endpoint(endpoint: &str) -> anyhow::Result<Option<SshInfo>> {
+fn parse_ssh_endpoint(endpoint: &str) -> Result<Option<SshInfo>> {
     if !endpoint.contains('@') {
         return Ok(None);
     }
@@ -375,7 +376,7 @@ fn parse_ssh_endpoint(endpoint: &str) -> anyhow::Result<Option<SshInfo>> {
     }))
 }
 
-fn parse_tcp_endpoint(endpoint: &str) -> anyhow::Result<Option<TcpInfo>> {
+fn parse_tcp_endpoint(endpoint: &str) -> Result<Option<TcpInfo>> {
     let Some((host, suffix)) = split_endpoint_host_suffix(endpoint)? else {
         return Ok(None);
     };
@@ -407,9 +408,10 @@ mod tests {
         actions::{Action, RemoteEndpoint, SyncOperand},
         commands,
     };
+    use anyhow::Result;
     use tempfile::tempdir;
 
-    fn parse_action(args: &[&str]) -> anyhow::Result<Action> {
+    fn parse_action(args: &[&str]) -> Result<Action> {
         let matches = commands::new().try_get_matches_from(args)?;
         handler(&matches)
     }
@@ -419,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_action_parses_public_flags() -> anyhow::Result<()> {
+    fn test_sync_action_parses_public_flags() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         let dst = dir.path().join("dst.txt");
@@ -461,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_ssh_endpoint_parses_remote_path() -> anyhow::Result<()> {
+    fn test_push_ssh_endpoint_parses_remote_path() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         std::fs::write(&src, "content")?;
@@ -508,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_ssh_endpoint_parses_large_file_parallel_flags() -> anyhow::Result<()> {
+    fn test_push_ssh_endpoint_parses_large_file_parallel_flags() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         std::fs::write(&src, "content")?;
@@ -541,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_tcp_endpoint_preserves_bracketed_ipv6_socket() -> anyhow::Result<()> {
+    fn test_push_tcp_endpoint_preserves_bracketed_ipv6_socket() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         std::fs::write(&src, "content")?;
@@ -564,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_tcp_endpoint_parses_large_file_parallel_flags() -> anyhow::Result<()> {
+    fn test_push_tcp_endpoint_parses_large_file_parallel_flags() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         std::fs::write(&src, "content")?;
@@ -600,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_stdio_endpoint_is_preserved_for_manual_piping() -> anyhow::Result<()> {
+    fn test_push_stdio_endpoint_is_preserved_for_manual_piping() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         std::fs::write(&src, "content")?;
@@ -618,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pull_ssh_endpoint_parses_remote_path_and_flags() -> anyhow::Result<()> {
+    fn test_pull_ssh_endpoint_parses_remote_path_and_flags() -> Result<()> {
         let dir = tempdir()?;
         let dst = dir.path().join("dst");
         std::fs::create_dir_all(&dst)?;
@@ -669,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pull_ssh_endpoint_parses_bracketed_ipv6_host() -> anyhow::Result<()> {
+    fn test_pull_ssh_endpoint_parses_bracketed_ipv6_host() -> Result<()> {
         let dir = tempdir()?;
         let dst = dir.path().join("dst");
         std::fs::create_dir_all(&dst)?;
@@ -697,8 +699,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_ssh_endpoint_defaults_empty_remote_path_to_current_directory() -> anyhow::Result<()>
-    {
+    fn test_push_ssh_endpoint_defaults_empty_remote_path_to_current_directory() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         std::fs::write(&src, "content")?;
@@ -726,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_ssh_endpoint_with_colons_in_path() -> anyhow::Result<()> {
+    fn test_push_ssh_endpoint_with_colons_in_path() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         std::fs::write(&src, "content")?;
@@ -754,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pull_tcp_accepts_source_side_flags() -> anyhow::Result<()> {
+    fn test_pull_tcp_accepts_source_side_flags() -> Result<()> {
         let dir = tempdir()?;
         let dst = dir.path().join("dst");
         std::fs::create_dir_all(&dst)?;
@@ -777,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_rejects_malformed_bracketed_endpoint() -> anyhow::Result<()> {
+    fn test_push_rejects_malformed_bracketed_endpoint() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         std::fs::write(&src, "content")?;
@@ -792,7 +793,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_rejects_ssh_endpoint_without_path() -> anyhow::Result<()> {
+    fn test_push_rejects_ssh_endpoint_without_path() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         std::fs::write(&src, "content")?;
@@ -811,7 +812,7 @@ mod tests {
     }
 
     #[test]
-    fn test_listen_and_serve_parse_expected_actions() -> anyhow::Result<()> {
+    fn test_listen_and_serve_parse_expected_actions() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src");
         let dst = dir.path().join("dst");
@@ -855,7 +856,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ignore_and_exclude_from_patterns_are_merged() -> anyhow::Result<()> {
+    fn test_ignore_and_exclude_from_patterns_are_merged() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src");
         let dst = dir.path().join("dst");
@@ -889,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_tcp_endpoint_parses_embedded_remote_path() -> anyhow::Result<()> {
+    fn test_sync_tcp_endpoint_parses_embedded_remote_path() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src");
         let dst = dir.path().join("dst");
@@ -930,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn test_internal_stdio_sender_parses_hidden_mode() -> anyhow::Result<()> {
+    fn test_internal_stdio_sender_parses_hidden_mode() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         std::fs::write(&src, "content")?;
@@ -969,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn test_internal_stdio_receiver_parses_hidden_ignores() -> anyhow::Result<()> {
+    fn test_internal_stdio_receiver_parses_hidden_ignores() -> Result<()> {
         let dir = tempdir()?;
         let dst = dir.path().join("dst");
         let dst_arg = dst.to_string_lossy().to_string();
@@ -994,7 +995,7 @@ mod tests {
     }
 
     #[test]
-    fn test_old_flat_public_syntax_is_rejected() -> anyhow::Result<()> {
+    fn test_old_flat_public_syntax_is_rejected() -> Result<()> {
         let dir = tempdir()?;
         let src = dir.path().join("src.txt");
         let dst = dir.path().join("dst.txt");
