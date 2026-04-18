@@ -8,8 +8,7 @@ pub const MAX_PARALLELISM: usize = 64;
 #[must_use]
 pub fn clamped_parallelism() -> usize {
     std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1)
+        .map_or(1, std::num::NonZeroUsize::get)
         .min(MAX_PARALLELISM)
 }
 

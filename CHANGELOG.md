@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-04-18
+
+### Changed
+
+- Updated codebase and refined internal patterns for compatibility with Rust 1.95.
+
+### Fixed
+
+- Fixed a critical syntax error in the CLI `LONG_ABOUT` help text that prevented compilation on newer toolchains.
+- Resolved clippy regressions introduced by Rust 1.95, including collapsible match arms in CLI dispatch and more idiomatic `map_or` usage in runtime utilities.
+
 ## [0.6.2] - 2026-03-29
 
 ### Changed

@@ -23,10 +23,7 @@ const LONG_ABOUT: &str = "pxs is an integrity-first sync and clone tool for \
     4. Raw TCP Sync:\n\
        pxs sync /var/lib/postgresql/data 192.168.1.10:8080/incoming/pgdata\n\n\
     5. Verify And Durably Commit:\n\
-       pxs sync file.bin backup.bin --checksum --fsync\n\n\
-    SUPPORTED PLATFORMS:\n\
-       Linux, macOS, and BSD.\n\
-       Windows is not supported.";
+       pxs sync file.bin backup.bin --checksum --fsync\n";
 const ABOUT: &str =
     "pxs (Parallel X-Sync) - Integrity-first sync/clone for large mutable datasets.";
 const THRESHOLD_LONG_HELP: &str = "Value between 0.1 and 1.0. If the destination file size is less than this fraction of the source, pxs rewrites the file instead of attempting block reuse.";

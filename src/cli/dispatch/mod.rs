@@ -285,10 +285,8 @@ fn split_endpoint_host_suffix(endpoint: &str) -> Result<Option<(&str, &str)>> {
                 );
                 bracket_depth = 0;
             }
-            ':' if bracket_depth == 0 => {
-                if first_colon.is_none() {
-                    first_colon = Some(index);
-                }
+            ':' if bracket_depth == 0 && first_colon.is_none() => {
+                first_colon = Some(index);
             }
             _ => {}
         }

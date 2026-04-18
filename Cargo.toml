@@ -1,6 +1,6 @@
 [package]
 name = "pxs"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2024"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "pxs (Parallel X-Sync) - Integrity-first Rust sync/clone for large mutable datasets."
@@ -65,7 +65,7 @@ opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "tls"] }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 rkyv = "0.8.15"
 serde = { version = "1.0.228", features = ["derive"] }
-tokio = { version = "1.50", features = ["full", "io-util", "macros", "net", "rt-multi-thread"] }
+tokio = { version = "1", features = ["full", "io-util", "macros", "net", "rt-multi-thread"] }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 tracing = "0.1"
 tracing-opentelemetry = "0.32"
