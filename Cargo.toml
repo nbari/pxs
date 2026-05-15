@@ -63,7 +63,7 @@ nix = { version = "0.31.2", features = ["fs", "user"] }
 opentelemetry = "0.31"
 opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "tls"] }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
-rkyv = "0.8.15"
+rkyv = "0.8.16"
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1", features = ["full", "io-util", "macros", "net", "rt-multi-thread"] }
 tokio-util = { version = "0.7.18", features = ["codec"] }
