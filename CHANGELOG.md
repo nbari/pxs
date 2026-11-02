@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-02
+
+### Added
+
+- Added an opt-in `telemetry` cargo feature that gates the OpenTelemetry/OTLP trace exporter and its dependencies (`opentelemetry`, `opentelemetry-otlp`, `opentelemetry_sdk`, `tonic`, `tracing-opentelemetry`); build with `cargo build --features telemetry`. **Breaking:** default builds no longer include the OTLP exporter at all — previously it was compiled in and activated when `OTEL_EXPORTER_OTLP_ENDPOINT` was set. With the feature enabled, traces are still only exported at runtime when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+
+### Changed
+
+- Updated dependencies via `cargo update` and `cargo upgrade`, including `opentelemetry`/`opentelemetry-otlp`/`opentelemetry_sdk` 0.31 → 0.33, `tracing-opentelemetry` 0.32 → 0.34, and `zstd` 0.13 → 0.14.
+- Declared `futures-util`'s `sink` feature explicitly so `SinkExt` no longer relies on feature unification from the now-optional telemetry dependency tree.
+
+### Fixed
+
+- Wired the webpki trust roots into the OTLP gRPC exporter so `https://` collector endpoints can verify server certificates; `opentelemetry-otlp`'s default HTTPS TLS config installs none.
+
 ## [0.6.3] - 2026-04-18
 
 ### Changed

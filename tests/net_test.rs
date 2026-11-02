@@ -1007,7 +1007,7 @@ async fn test_stdio_receiver_requests_parallel_blocks_with_transfer_id() -> Resu
             indices,
         } => {
             assert_eq!(path, protocol_path("delta.bin"));
-            assert!(!indices.is_empty());
+            assert_ne!(indices, [] as [u32; 0]);
             transfer_id
         }
         other => anyhow::bail!("expected RequestParallelBlocks, got {other:?}"),

@@ -324,6 +324,6 @@ fn test_compute_requested_blocks_handles_empty_hash_list() -> Result<()> {
     std::fs::write(&file_path, b"existing payload")?;
 
     let requested = compute_requested_blocks(&file_path, &[], 128 * 1024)?;
-    assert!(requested.is_empty());
+    assert_eq!(requested, [] as [u32; 0]);
     Ok(())
 }

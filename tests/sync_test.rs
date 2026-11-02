@@ -899,7 +899,7 @@ async fn test_sync_stats_aggregation_with_backpressure() -> Result<()> {
 
     let file_count = tools::MAX_PARALLELISM + 8;
     for index in 0..file_count {
-        fs::write(src_dir.join(format!("file-{index}.bin")), [b'x'])?;
+        fs::write(src_dir.join(format!("file-{index}.bin")), b"x")?;
     }
 
     let options = SyncOptions::new(1.0, false, false, false, Vec::new(), false, false);

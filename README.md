@@ -67,6 +67,15 @@ cargo build --release
 
 The binary will be available at `./target/release/pxs`.
 
+To include OpenTelemetry (OTLP) trace export, build with the `telemetry`
+feature (off by default):
+
+```bash
+cargo build --release --features telemetry
+```
+
+Traces are only exported when `OTEL_EXPORTER_OTLP_ENDPOINT` is set at runtime.
+
 > [!IMPORTANT]
 > For SSH or raw TCP sync, `pxs` must be installed and available in `$PATH` on
 > both sides.
